@@ -24,6 +24,7 @@ Before view labeling and ROI standardization, a minimal baseline quantified pred
 - **Backbone:** ResNet-50 (ImageNet-pretrained).
 - **Objective:** Regression to OCT-derived targets.
 - **Aggregation (late fusion):** Per-eye deep features aggregated late to a single prediction per target.
+- **Hyperparameter search:** Optuna sweep (lr, weight decay, batch size 4/8) using grouped validation MSE across all OCT targets jointly to select a reasonable baseline configuration.
 
 This baseline, trained on view-mixed inputs, provided a reference prior to view-consistent modeling.
 
@@ -59,7 +60,6 @@ Multiple backbones (ResNet, EfficientNet, Swin, etc.) trained for 10 epochs with
 - Loss: Huber (tuned delta in later runs).
 - Mild geometric/photometric augmentations; gradient clipping.
 - Metrics: MSE and MAE (z-scored and raw units).
-- Hyperparameter search: Optuna grid over learning rate, weight decay, and batch size (4/8) was used to find a reasonable baseline configuration across all OCT targets jointly (central and peripheral, temporal/nasal) using grouped validation MSE as the objective.
 
 ### References
 - Levenshtein, V. I. (1966). Binary codes capable of correcting deletions, insertions, and reversals. Soviet Physics Doklady, 10(8), 707–710.
