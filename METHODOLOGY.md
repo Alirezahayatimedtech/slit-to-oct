@@ -24,7 +24,6 @@ Before view labeling and ROI standardization, a minimal baseline quantified pred
 - **Backbone:** ResNet-50 (ImageNet-pretrained).
 - **Objective:** Regression to OCT-derived targets.
 - **Aggregation (late fusion):** Per-eye deep features aggregated late to a single prediction per target.
-- **Hyperparameter search:** Optuna sweep (lr, weight decay, batch size 4/8) using grouped validation MSE across all OCT targets jointly to select a reasonable baseline configuration.
 - **Evaluation outputs:** For the tuned baseline, we generated scatter plots (predicted vs. true) and a summary table reporting Pearson r, MAE/MSE (z-scored and raw), and RMSE to provide a quick diagnostic of baseline performance across targets.
 
 This baseline, trained on view-mixed inputs, provided a reference prior to view-consistent modeling.
