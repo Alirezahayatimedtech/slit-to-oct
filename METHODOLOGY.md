@@ -20,13 +20,13 @@ This yielded a consolidated dataset of 332 patients and 15,912 slit-lamp images 
 
 ### 4. Baseline Benchmark Model (First-Step Results)
 Before view labeling and ROI standardization, a minimal baseline quantified predictability of OCT parameters from raw slit-lamp images:
-- **Input:** Original slit-lamp images with standard resizing only (no beam/angle localization; no view-specific ROIs).
-- **Backbone:** ResNet-50 (ImageNet-pretrained).
-- **Objective:** Regression to OCT-derived targets.
-- **Aggregation (late fusion):** Per-eye deep features aggregated late to a single prediction per target.
-- **Evaluation outputs:** For the tuned baseline, we generated scatter plots (predicted vs. true) and a summary table reporting Pearson r, MAE/MSE (z-scored and raw), and RMSE to provide a quick diagnostic of baseline performance across targets.
+- **Input:** Original slit-lamp images with standard resizing only (no beam/angle localization; no view-specific ROIs), processed one image at a time.
+- **Labeling:** All images from the same eye share the same OCT-derived ground truth (label duplication at the image level).
+- **Backbone/Loss:** ResNet-50 (ImageNet-pretrained) with Huber loss for robustness to outliers.
+- **Training:** Loss computed per image (no train-time view aggregation); effective batch increased via gradient accumulation when memory-limited.
+- **Evaluation:** Primary reporting is per-image metrics (MAE/MSE/RMSE, z-scored and raw, Pearson r) to match the training regime. A secondary, practical view can be obtained by averaging predictions per eye at test time to see the gain from naive aggregation.
 
-This baseline, trained on view-mixed inputs, provided a reference prior to view-consistent modeling.
+This image-level baseline on view-mixed inputs provides a conservative reference prior to view-aware modeling.
 
 ### 5. View Categorization (Center vs Peripheral; Left vs Right) — Semi-Supervised Labeling
 Views were categorized into three classes: Center; Van Herick – Left; Van Herick – Right. Workflow:
