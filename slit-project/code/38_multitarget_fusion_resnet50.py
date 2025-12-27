@@ -40,6 +40,16 @@ def pearsonr_np(x: np.ndarray, y: np.ndarray) -> float:
     return float((x * y).sum() / denom)
 
 
+def mixup_batch(imgs: torch.Tensor, targets: torch.Tensor, alpha: float):
+    if alpha <= 0.0:
+        return imgs, targets, None, None
+    lam = np.random.beta(alpha, alpha)
+    idx = torch.randperm(imgs.size(0), device=imgs.device)
+    mixed_imgs = lam * imgs + (1.0 - lam) * imgs[idx]
+    targets_a, targets_b = targets, targets[idx]
+    return mixed_imgs, targets_a, targets_b, lam
+
+
 # --- CONFIGURATION --- (edit TARGET_COLS to switch targets; can override via CLI if desired)
 SOURCE_CSV = "ready_for_training_clustered_anatomical.csv"
 CROP_ROOT = Path("data/center_roi_images/processed_images_448")
@@ -51,7 +61,7 @@ IMG_SIZE = 224
 BATCH_SIZE = 8
 NUM_EPOCHS = 20
 LEARNING_RATE = 5e-4
-WEIGHT_DECAY = 3e-4
+WEIGHT_DECAY = 1e-3
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 PATIENCE = 6
 MIN_DELTA = 0.005
@@ -99,6 +109,7 @@ def parse_args():
         default=Path("fusion_test_scatter.png"),
         help="Save scatter plot of test preds vs true (set to empty string to disable).",
     )
+    p.add_argument("--mixup-alpha", type=float, default=0.2, help="Mixup alpha; 0 to disable.")
     return p.parse_args()
 
 
@@ -169,11 +180,13 @@ class EarlyFusionResNet(nn.Module):
         super().__init__()
         base = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
         self.backbone = nn.Sequential(*list(base.children())[:-1])  # up to avgpool
+        self.dropout = nn.Dropout(0.2)
         self.head = nn.Linear(base.fc.in_features, out_dim)
 
     def forward(self, x):
         f = self.backbone(x)  # [B, C, 1, 1]
         f = f.view(f.size(0), -1)
+        f = self.dropout(f)
         return self.head(f)
 
 
@@ -185,7 +198,10 @@ class MILResNet(nn.Module):
         base = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
         self.feature_extractor = nn.Sequential(*list(base.children())[:-1])  # [B, 2048, 1, 1]
         hidden = base.fc.in_features
-        self.head = nn.Linear(hidden, out_dim)
+        self.head = nn.Sequential(
+            nn.Dropout(0.2),
+            nn.Linear(hidden, out_dim),
+        )
 
     def forward(self, x, mask):
         # x: [B, V, C, H, W], mask: [B, V] bool
@@ -406,6 +422,7 @@ def main():
             transforms.RandomApply([transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.0))], p=0.02),
             transforms.ToTensor(),
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+            transforms.RandomErasing(p=0.25, scale=(0.02, 0.1)),
         ]
     )
     base_val_tf = transforms.Compose(
@@ -543,6 +560,8 @@ def main():
             for inputs, targets, _ in tqdm(train_loader, desc=f"Epoch {epoch}/{NUM_EPOCHS}"):
                 # inputs: [B, V, C, H, W]
                 inputs, targets = inputs.to(DEVICE), targets.to(DEVICE)
+                if args.mixup_alpha > 0:
+                    inputs, targets_a, targets_b, lam = mixup_batch(inputs, targets, args.mixup_alpha)
                 if args.method == "fusion":
                     if args.fusion == "early":
                         fused = inputs.mean(dim=1)
@@ -556,7 +575,10 @@ def main():
                     mask = inputs.abs().sum(dim=(2, 3, 4)) > 0
                     outputs = model(inputs, mask)
                 optimizer.zero_grad()
-                loss = criterion(outputs, targets)
+                if args.mixup_alpha > 0:
+                    loss = lam * criterion(outputs, targets_a) + (1 - lam) * criterion(outputs, targets_b)
+                else:
+                    loss = criterion(outputs, targets)
                 loss.backward()
                 clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
