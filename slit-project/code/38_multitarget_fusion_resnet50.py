@@ -7,6 +7,7 @@ ACD regression with fusion of all views using ResNet-50.
 - Regression head outputs the target(s) in TARGET_COLS (currently ACD only).
 - Patient-grouped split, target standardization, MSE loss, cosine LR, EMA, early stopping.
 """
+# Best ACD config: MIL attention, LR 5e-4, wd 5e-3, patience 6, mixup 0.2, val/test 0.15/0.15, no erasing.
 
 import argparse
 import copy
@@ -51,12 +52,12 @@ def mixup_batch(imgs: torch.Tensor, targets: torch.Tensor, alpha: float):
 
 
 # --- CONFIGURATION --- (edit TARGET_COLS to switch targets; can override via CLI if desired)
-SOURCE_CSV = "ready_for_training_clustered_anatomical.csv"
+SOURCE_CSV = "ready_for_training_clustered_anatomical_with_means.csv"
 CROP_ROOT = Path("data/center_roi_images/processed_images_448")
 # Single-target ACD regression; adjust list to add more targets later.
 TARGET_COLS = ["ACD[Endo.]"]
 MIN_VIEWS = 1
-MAX_VIEWS = 30  # cap views to save memory
+MAX_VIEWS = 15  # cap views to save memory
 IMG_SIZE = 224
 BATCH_SIZE = 8
 NUM_EPOCHS = 20
