@@ -1,10 +1,10 @@
 """
-Multi-target regression with fusion of all views using ResNet-50.
+ACD regression with fusion of all views using ResNet-50.
 
 - Groups images by patient/eye (filename prefix 'patient_eye_*').
 - Uses ALL available views per combo (requires at least MIN_VIEWS; caps at MAX_VIEWS to save memory).
 - Fusion: average transformed views into a single image tensor before the backbone (toggle logic externally if you add other fusion modes).
-- Regression head outputs all targets in TARGET_COLS.
+- Regression head outputs the target(s) in TARGET_COLS (currently ACD only).
 - Patient-grouped split, target standardization, MSE loss, cosine LR, EMA, early stopping.
 """
 
@@ -41,63 +41,23 @@ def pearsonr_np(x: np.ndarray, y: np.ndarray) -> float:
 
 
 # --- CONFIGURATION --- (edit TARGET_COLS to switch targets; can override via CLI if desired)
-SOURCE_CSV = "ready_for_training_clustered_anatomical_with_means.csv"
+SOURCE_CSV = "ready_for_training_clustered_anatomical.csv"
 CROP_ROOT = Path("data/center_roi_images/processed_images_448")
-# Targets to predict
-TARGET_COLS = [
- "TIA500_mean"
-]
-
-"""
-#TARGET_COLS = [
-    "CCT",
-    "ACD[Endo.]",
-    "LV",
-    "Lens Thick.",
-    "ACW",
-    "ATA",
-    "ATA-depth",
-    "AOD250_temporal",
-    "AOD250_nasal",
-    "AOD500_temporal",
-    "AOD500_nasal",
-    "AOD750_temporal",
-    "AOD750_nasal",
-    "ARA250_temporal",
-    "ARA250_nasal",
-    "ARA500_temporal",
-    "ARA500_nasal",
-    "ARA750_temporal",
-    "ARA750_nasal",
-    "TISA250_temporal",
-    "TISA250_nasal",
-    "TISA500_temporal",
-    "TISA500_nasal",
-    "TISA750_temporal",
-    "TISA750_nasal",
-    "TIA250_temporal",
-    "TIA250_nasal",
-    "TIA500_temporal",
-    "TIA500_nasal",
-    "TIA750_temporal",
-    "TIA750_nasal",
-#]
-"""
+# Single-target ACD regression; adjust list to add more targets later.
+TARGET_COLS = ["ACD[Endo.]"]
 MIN_VIEWS = 1
-MAX_VIEWS = 20 # cap views to save memory
+MAX_VIEWS = 20  # cap views to save memory
 IMG_SIZE = 224
 BATCH_SIZE = 8
-ACCUM_STEPS = 2  # effective batch size = BATCH_SIZE * ACCUM_STEPS
 NUM_EPOCHS = 20
-LEARNING_RATE = 2e-4
-WEIGHT_DECAY = 1e-3
+LEARNING_RATE = 5e-4
+WEIGHT_DECAY = 3e-4
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 PATIENCE = 6
 MIN_DELTA = 0.005
 EMA_DECAY = 0.999
 VAL_FRACTION = 0.1
 TEST_FRACTION = 0.1
-
 
 WINDOWS_PREFIX = "G:\\thesis-slit-oct-project\\data\\processed_images\\"
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -110,16 +70,15 @@ IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225])
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Multi-target fusion training/eval (ResNet50).")
+    p = argparse.ArgumentParser(description="ACD fusion training/eval (ResNet50).")
     p.add_argument("--eval-only", action="store_true", help="Skip training and only run evaluation.")
     p.add_argument("--method", type=str, choices=["fusion", "mil"], default="fusion", help="Training method: fusion (early/late) or MIL attention pooling.")
     p.add_argument("--fusion", type=str, choices=["early", "late"], default="early", help="Fusion mode (only used when --method fusion).")
-    p.add_argument("--image-level-baseline", action="store_true", help="Train per image (duplicate per-eye labels) and aggregate only at eval.")
     p.add_argument("--tune", action="store_true", help="Run Optuna hyperparameter search instead of full training.")
     p.add_argument("--tune-trials", type=int, default=10, help="Number of Optuna trials.")
     p.add_argument("--tune-epochs", type=int, default=5, help="Epochs per trial during tuning.")
-    default_ckpt = Path(f"resnet_fusion_{'_'.join(TARGET_COLS)}.pth")
-    default_scaler = Path(f"scaler_fusion_{'_'.join(TARGET_COLS)}.npz")
+    default_ckpt = Path("resnet_fusion_acd.pth")
+    default_scaler = Path("scaler_fusion_acd.npz")
     p.add_argument("--checkpoint", type=Path, default=default_ckpt, help="Path to load/save model weights.")
     p.add_argument("--scaler-path", type=Path, default=default_scaler, help="Path to load/save target scaler.")
     p.add_argument(
@@ -240,7 +199,7 @@ class MILResNet(nn.Module):
         return self.head(bag)
 
 
-def load_and_prepare(aggregate_views: bool = True):
+def load_and_prepare():
     df = pd.read_csv(SOURCE_CSV)
     for col in ["Image_Path"] + TARGET_COLS:
         if col not in df.columns:
@@ -259,22 +218,10 @@ def load_and_prepare(aggregate_views: bool = True):
     if df.empty:
         raise SystemExit(f"No combos with at least {MIN_VIEWS} images.")
     samples = []
-    if aggregate_views:
-        for key, group in df.groupby("combo_key"):
-            paths = group["Image_Path"].tolist()
-            targets = group[TARGET_COLS].mean().values  # mean targets per combo
-            samples.append({"combo_key": key, "Paths": paths, "targets": targets, "num_views": len(paths)})
-    else:
-        for _, row in df.iterrows():
-            key = row["combo_key"]
-            samples.append(
-                {
-                    "combo_key": key,
-                    "Paths": [row["Image_Path"]],
-                    "targets": row[TARGET_COLS].values.astype(float),
-                    "num_views": 1,
-                }
-            )
+    for key, group in df.groupby("combo_key"):
+        paths = group["Image_Path"].tolist()
+        targets = group[TARGET_COLS].mean().values  # mean targets per combo
+        samples.append({"combo_key": key, "Paths": paths, "targets": targets, "num_views": len(paths)})
     return pd.DataFrame(samples)
 
 
@@ -370,26 +317,6 @@ def _save_scatter_plot(y_true, y_pred, out_path: Path, title: str, pearson_r: fl
     plt.close()
 
 
-def _save_per_target_outputs(keys, true_mat, pred_mat, args, split: str):
-    """Save per-target prediction CSVs and optional scatter plots (aggregated per eye/patient)."""
-    keys_arr = np.array(keys)
-    df_all = pd.DataFrame({"combo_key": keys_arr})
-    base = Path(args.test_scatter) if args.test_scatter else None
-    out_dir = base.parent if base else Path(".")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for i, name in enumerate(TARGET_COLS):
-        df_target = df_all.copy()
-        df_target["true"] = true_mat[:, i]
-        df_target["pred"] = pred_mat[:, i]
-        df_target = df_target.groupby("combo_key", as_index=False).mean()
-        df_target["error"] = df_target["pred"] - df_target["true"]
-        csv_path = out_dir / f"{split}_preds_{name}_per_eye.csv"
-        df_target.to_csv(csv_path, index=False)
-        if base:
-            scatter_path = out_dir / f"{base.stem}_{split}_{name}_per_eye.png"
-            _save_scatter_plot(df_target["true"].to_numpy(), df_target["pred"].to_numpy(), scatter_path, f"{split}: {name}")
-
-
 def _save_attention_for_loader(loader, model, args, split_name: str, already_saved: int) -> int:
     """Iterate a loader and dump Grad-CAM overlays (early fusion only)."""
     if args.fusion != "early":
@@ -427,10 +354,9 @@ def main():
     # Allow disabling scatter by passing an empty string
     if args.test_scatter and str(args.test_scatter).strip() == "":
         args.test_scatter = None
-    base_note = " | image-level baseline" if args.image_level_baseline else ""
-    mode_desc = f"{'EVAL' if args.eval_only else 'TRAINING'} {'MIL' if args.method == 'mil' else f'Fusion ({args.fusion})'}{base_note}"
+    mode_desc = f"{'EVAL' if args.eval_only else 'TRAINING'} {'MIL' if args.method == 'mil' else f'Fusion ({args.fusion})'}"
     print(f"--- {mode_desc} (all views per combo): {', '.join(TARGET_COLS)} ---")
-    df = load_and_prepare(aggregate_views=not args.image_level_baseline)
+    df = load_and_prepare()
     groups = df["combo_key"]
     # report raw target stats before scaling
     raw_targets = np.vstack(df["targets"].to_list())
@@ -505,7 +431,7 @@ def main():
         model = EarlyFusionResNet(out_dim=len(TARGET_COLS)).to(DEVICE)
     else:
         model = MILResNet(out_dim=len(TARGET_COLS)).to(DEVICE)
-    criterion = nn.HuberLoss(delta=1.0)
+    criterion = nn.MSELoss()
 
     if args.tune:
         try:
@@ -587,7 +513,7 @@ def main():
             return best_val
 
         study = optuna.create_study(direction="minimize")
-        study.optimize(objective, n_trials=args.tune_trials, show_progress_bar=True)
+        study.optimize(objective, n_trials=args.tune_trials)
         print(f"[TUNE] Best trial value: {study.best_trial.value:.4f}")
         print(f"[TUNE] Best params: {study.best_trial.params}")
         return
@@ -614,8 +540,7 @@ def main():
         for epoch in range(1, NUM_EPOCHS + 1):
             model.train()
             running = 0.0
-            optimizer.zero_grad()
-            for step, (inputs, targets, _) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch}/{NUM_EPOCHS}")):
+            for inputs, targets, _ in tqdm(train_loader, desc=f"Epoch {epoch}/{NUM_EPOCHS}"):
                 # inputs: [B, V, C, H, W]
                 inputs, targets = inputs.to(DEVICE), targets.to(DEVICE)
                 if args.method == "fusion":
@@ -630,17 +555,15 @@ def main():
                 else:
                     mask = inputs.abs().sum(dim=(2, 3, 4)) > 0
                     outputs = model(inputs, mask)
-                loss_raw = criterion(outputs, targets)
-                (loss_raw / ACCUM_STEPS).backward()
-                running += loss_raw.item() * inputs.size(0)
-
-                if (step + 1) % ACCUM_STEPS == 0 or (step + 1) == len(train_loader):
-                    clip_grad_norm_(model.parameters(), 1.0)
-                    optimizer.step()
-                    optimizer.zero_grad()
-                    with torch.no_grad():
-                        for p_ema, p in zip(ema_model.parameters(), model.parameters()):
-                            p_ema.mul_(EMA_DECAY).add_(p, alpha=1.0 - EMA_DECAY)
+                optimizer.zero_grad()
+                loss = criterion(outputs, targets)
+                loss.backward()
+                clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
+                with torch.no_grad():
+                    for p_ema, p in zip(ema_model.parameters(), model.parameters()):
+                        p_ema.mul_(EMA_DECAY).add_(p, alpha=1.0 - EMA_DECAY)
+                running += loss.item() * inputs.size(0)
 
             scheduler.step()
             train_loss = running / len(train_ds)
@@ -650,7 +573,6 @@ def main():
             val_mae_running = 0.0
             val_true_raw = []
             val_pred_raw = []
-            val_keys_all = []
             with torch.no_grad():
                 for inputs, targets, _ in val_loader:
                     inputs, targets = inputs.to(DEVICE), targets.to(DEVICE)
@@ -675,22 +597,17 @@ def main():
                     targ_raw = targets * sig + mu
                     val_pred_raw.append(pred_raw.detach().cpu().numpy())
                     val_true_raw.append(targ_raw.detach().cpu().numpy())
-                    val_keys_all.extend(_)
 
             val_loss = val_running / len(val_ds)
             val_mae = val_mae_running / len(val_ds)
             if val_true_raw:
-                val_true_mat = np.vstack(val_true_raw)  # [N, T]
-                val_pred_mat = np.vstack(val_pred_raw)  # [N, T]
-                y_true = val_true_mat.ravel()
-                y_pred = val_pred_mat.ravel()
+                y_true = np.vstack(val_true_raw).ravel()
+                y_pred = np.vstack(val_pred_raw).ravel()
                 mae_raw = float(np.mean(np.abs(y_pred - y_true)))
                 rmse_raw = float(np.sqrt(np.mean((y_pred - y_true) ** 2)))
                 r_raw = pearsonr_np(y_true, y_pred)
-                mae_raw_eye = rmse_raw_eye = r_raw_eye = float("nan")
             else:
                 mae_raw = rmse_raw = r_raw = float("nan")
-                mae_raw_eye = rmse_raw_eye = r_raw_eye = float("nan")
             current_lr = optimizer.param_groups[0]["lr"]
             print(
                 f"  Train (MSE): {train_loss:.4f} | Val (MSE): {val_loss:.4f} | "
@@ -720,7 +637,6 @@ def main():
     val_mae_running = 0.0
     val_true_raw = []
     val_pred_raw = []
-    val_keys_all = []
     with torch.no_grad():
         for inputs, targets, _ in val_loader:
             inputs, targets = inputs.to(DEVICE), targets.to(DEVICE)
@@ -745,22 +661,17 @@ def main():
             targ_raw = targets * sig + mu
             val_pred_raw.append(pred_raw.detach().cpu().numpy())
             val_true_raw.append(targ_raw.detach().cpu().numpy())
-            val_keys_all.extend(_)
 
     val_loss = val_running / len(val_ds)
     val_mae = val_mae_running / len(val_ds)
     if val_true_raw:
-        val_true_mat = np.vstack(val_true_raw)
-        val_pred_mat = np.vstack(val_pred_raw)
-        y_true = val_true_mat.ravel()
-        y_pred = val_pred_mat.ravel()
+        y_true = np.vstack(val_true_raw).ravel()
+        y_pred = np.vstack(val_pred_raw).ravel()
         mae_raw = float(np.mean(np.abs(y_pred - y_true)))
         rmse_raw = float(np.sqrt(np.mean((y_pred - y_true) ** 2)))
         r_raw = pearsonr_np(y_true, y_pred)
-        mae_raw_eye = rmse_raw_eye = r_raw_eye = float("nan")
     else:
         mae_raw = rmse_raw = r_raw = float("nan")
-        mae_raw_eye = rmse_raw_eye = r_raw_eye = float("nan")
     print(
         f"[FINAL] Val (MSE): {val_loss:.4f} | Val MAE(z): {val_mae:.4f} | "
         f"Val MAE(raw): {mae_raw:.4f} | Val RMSE(raw): {rmse_raw:.4f} | Pearson r: {r_raw:.4f}"
@@ -772,7 +683,6 @@ def main():
         test_mae_running = 0.0
         test_true_raw = []
         test_pred_raw = []
-        test_keys_all = []
         with torch.no_grad():
             for inputs, targets, _ in test_loader:
                 inputs, targets = inputs.to(DEVICE), targets.to(DEVICE)
@@ -797,23 +707,17 @@ def main():
                 targ_raw = targets * sig + mu
                 test_pred_raw.append(pred_raw.detach().cpu().numpy())
                 test_true_raw.append(targ_raw.detach().cpu().numpy())
-                test_keys_all.extend(_)
 
         test_loss = test_running / len(test_ds)
         test_mae = test_mae_running / len(test_ds)
         if test_true_raw:
-            test_true_mat = np.vstack(test_true_raw)
-            test_pred_mat = np.vstack(test_pred_raw)
-            y_true_t = test_true_mat.ravel()
-            y_pred_t = test_pred_mat.ravel()
+            y_true_t = np.vstack(test_true_raw).ravel()
+            y_pred_t = np.vstack(test_pred_raw).ravel()
             mae_raw_t = float(np.mean(np.abs(y_pred_t - y_true_t)))
             rmse_raw_t = float(np.sqrt(np.mean((y_pred_t - y_true_t) ** 2)))
             r_raw_t = pearsonr_np(y_true_t, y_pred_t)
-            _save_per_target_outputs(test_keys_all, test_true_mat, test_pred_mat, args, split="test")
-            mae_raw_eye_t = rmse_raw_eye_t = r_raw_eye_t = float("nan")
         else:
             mae_raw_t = rmse_raw_t = r_raw_t = float("nan")
-            mae_raw_eye_t = rmse_raw_eye_t = r_raw_eye_t = float("nan")
         print(
             f"[TEST] Test (MSE): {test_loss:.4f} | Test MAE(z): {test_mae:.4f} | "
             f"Test MAE(raw): {mae_raw_t:.4f} | Test RMSE(raw): {rmse_raw_t:.4f} | Pearson r: {r_raw_t:.4f}"
