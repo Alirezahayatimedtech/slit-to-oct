@@ -61,13 +61,13 @@ IMG_SIZE = 224
 BATCH_SIZE = 8
 NUM_EPOCHS = 20
 LEARNING_RATE = 5e-4
-WEIGHT_DECAY = 1e-3
+WEIGHT_DECAY = 5e-3
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 PATIENCE = 6
 MIN_DELTA = 0.005
 EMA_DECAY = 0.999
-VAL_FRACTION = 0.1
-TEST_FRACTION = 0.1
+VAL_FRACTION = 0.15
+TEST_FRACTION = 0.15
 
 WINDOWS_PREFIX = "G:\\thesis-slit-oct-project\\data\\processed_images\\"
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -87,7 +87,7 @@ def parse_args():
     p.add_argument("--tune", action="store_true", help="Run Optuna hyperparameter search instead of full training.")
     p.add_argument("--tune-trials", type=int, default=10, help="Number of Optuna trials.")
     p.add_argument("--tune-epochs", type=int, default=5, help="Epochs per trial during tuning.")
-    default_ckpt = Path("resnet_fusion_acd.pth")
+    default_ckpt = Path("resnet50_fusion_acd.pth")
     default_scaler = Path("scaler_fusion_acd.npz")
     p.add_argument("--checkpoint", type=Path, default=default_ckpt, help="Path to load/save model weights.")
     p.add_argument("--scaler-path", type=Path, default=default_scaler, help="Path to load/save target scaler.")
@@ -109,7 +109,7 @@ def parse_args():
         default=Path("fusion_test_scatter.png"),
         help="Save scatter plot of test preds vs true (set to empty string to disable).",
     )
-    p.add_argument("--mixup-alpha", type=float, default=0.2, help="Mixup alpha; 0 to disable.")
+    p.add_argument("--mixup-alpha", type=float, default=0.3, help="Mixup alpha; 0 to disable.")
     return p.parse_args()
 
 
@@ -180,7 +180,7 @@ class EarlyFusionResNet(nn.Module):
         super().__init__()
         base = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
         self.backbone = nn.Sequential(*list(base.children())[:-1])  # up to avgpool
-        self.dropout = nn.Dropout(0.2)
+        self.dropout = nn.Dropout(0.3)
         self.head = nn.Linear(base.fc.in_features, out_dim)
 
     def forward(self, x):
@@ -191,15 +191,19 @@ class EarlyFusionResNet(nn.Module):
 
 
 class MILResNet(nn.Module):
-    """MIL with simple mean pooling over per-view features."""
+    """MIL with attention pooling over per-view features."""
 
     def __init__(self, out_dim: int):
         super().__init__()
         base = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
         self.feature_extractor = nn.Sequential(*list(base.children())[:-1])  # [B, 2048, 1, 1]
         hidden = base.fc.in_features
+        self.attn = nn.Sequential(
+            nn.Dropout(0.1),
+            nn.Linear(hidden, 1),
+        )
         self.head = nn.Sequential(
-            nn.Dropout(0.2),
+            nn.Dropout(0.3),
             nn.Linear(hidden, out_dim),
         )
 
@@ -209,9 +213,11 @@ class MILResNet(nn.Module):
         flat = x.view(b * v, c, h, w)
         feats = self.feature_extractor(flat).view(b, v, -1)  # [B, V, D]
         mask_f = mask.unsqueeze(-1)  # [B, V, 1]
-        feats = feats * mask_f  # zero padded views
-        valid_counts = mask_f.sum(dim=1).clamp(min=1.0)  # [B,1]
-        bag = feats.sum(dim=1) / valid_counts  # mean pooling over valid views
+        attn_scores = self.attn(feats).squeeze(-1)  # [B, V]
+        attn_scores = attn_scores.masked_fill(~mask, -1e9)
+        attn_weights = torch.softmax(attn_scores, dim=1).unsqueeze(-1)  # [B, V, 1]
+        feats = feats * attn_weights * mask_f  # zero-out padded views
+        bag = feats.sum(dim=1)  # weighted sum over views
         return self.head(bag)
 
 
@@ -415,7 +421,8 @@ def main():
 
     base_train_tf = transforms.Compose(
         [
-            transforms.Resize((IMG_SIZE, IMG_SIZE)),
+            transforms.Resize(int(IMG_SIZE * 1.05)),
+            transforms.CenterCrop(IMG_SIZE),
             transforms.RandomRotation(degrees=3),
             transforms.ColorJitter(brightness=0.08, contrast=0.08),
             transforms.RandomAffine(degrees=0, translate=(0.05, 0.05)),
@@ -427,7 +434,8 @@ def main():
     )
     base_val_tf = transforms.Compose(
         [
-            transforms.Resize((IMG_SIZE, IMG_SIZE)),
+            transforms.Resize(int(IMG_SIZE * 1.05)),
+            transforms.CenterCrop(IMG_SIZE),
             transforms.ToTensor(),
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ]
