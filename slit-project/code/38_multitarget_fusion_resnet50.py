@@ -56,7 +56,7 @@ CROP_ROOT = Path("data/center_roi_images/processed_images_448")
 # Single-target ACD regression; adjust list to add more targets later.
 TARGET_COLS = ["ACD[Endo.]"]
 MIN_VIEWS = 1
-MAX_VIEWS = 20  # cap views to save memory
+MAX_VIEWS = 30  # cap views to save memory
 IMG_SIZE = 224
 BATCH_SIZE = 8
 NUM_EPOCHS = 20
@@ -109,7 +109,10 @@ def parse_args():
         default=Path("fusion_test_scatter.png"),
         help="Save scatter plot of test preds vs true (set to empty string to disable).",
     )
-    p.add_argument("--mixup-alpha", type=float, default=0.3, help="Mixup alpha; 0 to disable.")
+    p.add_argument("--mixup-alpha", type=float, default=0.2, help="Mixup alpha; 0 to disable.")
+    p.add_argument("--eta-min", type=float, default=1e-6, help="Min LR for cosine annealing.")
+    p.add_argument("--freeze-epochs", type=int, default=0, help="Freeze backbone for N epochs before unfreezing.")
+    p.add_argument("--unfreeze-lr-factor", type=float, default=1.0, help="Multiply LR by this when unfreezing.")
     return p.parse_args()
 
 
@@ -219,6 +222,24 @@ class MILResNet(nn.Module):
         feats = feats * attn_weights * mask_f  # zero-out padded views
         bag = feats.sum(dim=1)  # weighted sum over views
         return self.head(bag)
+
+
+def freeze_backbone(model):
+    if hasattr(model, "backbone"):
+        for p in model.backbone.parameters():
+            p.requires_grad = False
+    if hasattr(model, "feature_extractor"):
+        for p in model.feature_extractor.parameters():
+            p.requires_grad = False
+
+
+def unfreeze_backbone(model):
+    if hasattr(model, "backbone"):
+        for p in model.backbone.parameters():
+            p.requires_grad = True
+    if hasattr(model, "feature_extractor"):
+        for p in model.feature_extractor.parameters():
+            p.requires_grad = True
 
 
 def load_and_prepare():
@@ -429,7 +450,6 @@ def main():
             transforms.RandomApply([transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.0))], p=0.02),
             transforms.ToTensor(),
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-            transforms.RandomErasing(p=0.25, scale=(0.02, 0.1)),
         ]
     )
     base_val_tf = transforms.Compose(
@@ -457,6 +477,11 @@ def main():
     else:
         model = MILResNet(out_dim=len(TARGET_COLS)).to(DEVICE)
     criterion = nn.MSELoss()
+    backbone_frozen = False
+    if args.freeze_epochs > 0:
+        freeze_backbone(model)
+        backbone_frozen = True
+        print(f"[TRAIN] Freezing backbone for first {args.freeze_epochs} epoch(s).")
 
     if args.tune:
         try:
@@ -555,7 +580,7 @@ def main():
         ema_model.load_state_dict(state, strict=False)
         print(f"[EVAL] Loaded weights from {args.checkpoint}")
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS, eta_min=args.eta_min)
 
     best_loss = float("inf")
     best_state = None
@@ -563,6 +588,12 @@ def main():
 
     if not args.eval_only:
         for epoch in range(1, NUM_EPOCHS + 1):
+            if backbone_frozen and epoch > args.freeze_epochs:
+                unfreeze_backbone(model)
+                backbone_frozen = False
+                for g in optimizer.param_groups:
+                    g["lr"] *= args.unfreeze_lr_factor
+                print(f"[TRAIN] Unfroze backbone at epoch {epoch}, LR scaled by {args.unfreeze_lr_factor}.")
             model.train()
             running = 0.0
             for inputs, targets, _ in tqdm(train_loader, desc=f"Epoch {epoch}/{NUM_EPOCHS}"):
