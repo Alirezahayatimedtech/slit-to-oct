@@ -24,6 +24,7 @@ import random
 from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
+import json
 from sklearn.model_selection import GroupShuffleSplit
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, Dataset
@@ -31,6 +32,7 @@ from torchvision import models, transforms
 from tqdm import tqdm
 from torch.nn.utils import clip_grad_norm_
 import torch.nn.functional as F
+from torchvision import transforms as tv_transforms  # alias for functional TTA ops
 
 
 def pearsonr_np(x: np.ndarray, y: np.ndarray) -> float:
@@ -56,12 +58,12 @@ def mixup_batch(imgs: torch.Tensor, targets: torch.Tensor, alpha: float):
 SOURCE_CSV = "ready_for_training_clustered_anatomical_with_means.csv"
 CROP_ROOT = Path("data/center_roi_images/processed_images_448")
 # Single-target ACD regression; adjust list to add more targets later.
-TARGET_COLS = ["ACD[Endo.]", "TIA500"]
+TARGET_COLS = ["ACD[Endo.]"]
 MIN_VIEWS = 1
 MAX_VIEWS = 15  # cap views to save memory
 IMG_SIZE = 224
 BATCH_SIZE = 8
-NUM_EPOCHS = 20
+NUM_EPOCHS = 40
 LEARNING_RATE = 5e-4
 WEIGHT_DECAY = 5e-3
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -89,6 +91,8 @@ def parse_args():
     p.add_argument("--tune", action="store_true", help="Run Optuna hyperparameter search instead of full training.")
     p.add_argument("--tune-trials", type=int, default=10, help="Number of Optuna trials.")
     p.add_argument("--tune-epochs", type=int, default=5, help="Epochs per trial during tuning.")
+    p.add_argument("--tune-patience", type=int, default=5, help="Early-stop patience (epochs) inside each Optuna trial.")
+    p.add_argument("--tune-save", type=Path, default=Path("tune_best_params.json"), help="Where to save best tuning params (JSON).")
     default_ckpt = Path("resnet50_fusion_acd.pth")
     default_scaler = Path("scaler_fusion_acd.npz")
     p.add_argument("--checkpoint", type=Path, default=default_ckpt, help="Path to load/save model weights.")
@@ -115,6 +119,14 @@ def parse_args():
     p.add_argument("--eta-min", type=float, default=1e-6, help="Min LR for cosine annealing.")
     p.add_argument("--freeze-epochs", type=int, default=0, help="Freeze backbone for N epochs before unfreezing.")
     p.add_argument("--unfreeze-lr-factor", type=float, default=1.0, help="Multiply LR by this when unfreezing.")
+    p.add_argument("--tta", type=int, default=0, help="Number of TTA passes for MIL (0 disables).")
+    p.add_argument("--max-views", type=int, default=MAX_VIEWS, help="Cap on number of views per combo.")
+    p.add_argument("--min-views", type=int, default=MIN_VIEWS, help="Require at least this many views per combo; drop combos below.")
+    p.add_argument("--views-per-bag", type=int, default=None, help="If set, use exactly this many views per combo (drop combos with fewer).")
+    p.add_argument("--top-k", type=int, default=5, help="Top-K views for MIL pooling (ignored for fusion).")
+    p.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Batch size for training/eval.")
+    p.add_argument("--lr", type=float, default=LEARNING_RATE, help="Learning rate for main training.")
+    p.add_argument("--weight-decay", type=float, default=WEIGHT_DECAY, help="Weight decay for main training.")
     return p.parse_args()
 
 
@@ -134,10 +146,12 @@ def resolve_crop_path(p: str) -> str | None:
 
 
 class MultiViewDataset(Dataset):
-    def __init__(self, samples, target_cols, base_transform=None):
+    def __init__(self, samples, target_cols, base_transform=None, max_views: int = MAX_VIEWS, fixed_views: int | None = None):
         self.samples = samples  # list of dicts with Paths, targets, combo_key
         self.target_cols = target_cols
         self.base_transform = base_transform
+        self.max_views = max_views
+        self.fixed_views = fixed_views
 
     def __len__(self):
         return len(self.samples)
@@ -145,12 +159,13 @@ class MultiViewDataset(Dataset):
     def __getitem__(self, idx):
         item = self.samples[idx]
         paths = item["Paths"]
-        # randomly subsample views per eye if exceeding MAX_VIEWS
-        if len(paths) > MAX_VIEWS:
-            paths = random.sample(paths, MAX_VIEWS)
+        target_views = self.fixed_views if self.fixed_views is not None else self.max_views
+        # randomly subsample views per eye to target_views cap
+        if len(paths) > target_views:
+            paths = random.sample(paths, target_views)
         y = np.array(item["targets"], dtype=np.float32)
         views = []
-        for p in paths[:MAX_VIEWS]:
+        for p in paths[:target_views]:
             try:
                 img = Image.open(p).convert("RGB")
             except Exception:
@@ -196,17 +211,19 @@ class EarlyFusionResNet(nn.Module):
 
 
 class MILResNet(nn.Module):
-    """MIL with attention pooling over per-view features."""
+    """MIL with top-K selection and gated attention pooling."""
 
-    def __init__(self, out_dim: int):
+    def __init__(self, out_dim: int, top_k: int = 5):
         super().__init__()
         base = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
         self.feature_extractor = nn.Sequential(*list(base.children())[:-1])  # [B, 2048, 1, 1]
         hidden = base.fc.in_features
-        self.attn = nn.Sequential(
-            nn.Dropout(0.1),
-            nn.Linear(hidden, 1),
-        )
+        self.top_k = top_k
+        self.relevance = nn.Sequential(nn.Dropout(0.1), nn.Linear(hidden, 256), nn.ReLU(), nn.Linear(256, 1))
+        # Gated attention (Ilse et al.)
+        self.attn_V = nn.Sequential(nn.Dropout(0.1), nn.Linear(hidden, 256), nn.Tanh())
+        self.attn_U = nn.Sequential(nn.Dropout(0.1), nn.Linear(hidden, 256), nn.Sigmoid())
+        self.attn_W = nn.Linear(256, 1)
         self.head = nn.Sequential(
             nn.Dropout(0.3),
             nn.Linear(hidden, out_dim),
@@ -218,11 +235,20 @@ class MILResNet(nn.Module):
         flat = x.view(b * v, c, h, w)
         feats = self.feature_extractor(flat).view(b, v, -1)  # [B, V, D]
         mask_f = mask.unsqueeze(-1)  # [B, V, 1]
-        attn_scores = self.attn(feats).squeeze(-1)  # [B, V]
-        attn_scores = attn_scores.masked_fill(~mask, -1e9)
-        attn_weights = torch.softmax(attn_scores, dim=1).unsqueeze(-1)  # [B, V, 1]
-        feats = feats * attn_weights * mask_f  # zero-out padded views
-        bag = feats.sum(dim=1)  # weighted sum over views
+        # top-k selection based on relevance
+        rel_scores = self.relevance(feats).squeeze(-1)  # [B, V]
+        rel_scores = rel_scores.masked_fill(~mask, -1e9)
+        k = min(self.top_k, v)
+        topk_scores, topk_idx = torch.topk(rel_scores, k=k, dim=1)
+        idx_exp = topk_idx.unsqueeze(-1).expand(-1, -1, feats.size(-1))
+        topk_feats = torch.gather(feats, 1, idx_exp)  # [B, K, D]
+        # gated attention on top-k
+        Vh = self.attn_V(topk_feats)
+        Uh = self.attn_U(topk_feats)
+        attn_scores = self.attn_W(Vh * Uh).squeeze(-1)  # [B, K]
+        attn_weights = torch.softmax(attn_scores, dim=1).unsqueeze(-1)
+        bag = (topk_feats * attn_weights).sum(dim=1)  # [B, D]
+        bag = bag  # already aggregated; mask not needed post top-k
         return self.head(bag)
 
 
@@ -244,7 +270,7 @@ def unfreeze_backbone(model):
             p.requires_grad = True
 
 
-def load_and_prepare():
+def load_and_prepare(min_views: int):
     df = pd.read_csv(SOURCE_CSV)
     for col in ["Image_Path"] + TARGET_COLS:
         if col not in df.columns:
@@ -258,10 +284,10 @@ def load_and_prepare():
         raise SystemExit("No valid rows after path resolution.")
     df["combo_key"] = df["Image_Path"].apply(lambda p: "_".join(os.path.basename(str(p)).split("_")[:2]).upper())
     counts = df["combo_key"].value_counts()
-    keep_keys = set(counts[counts >= MIN_VIEWS].index)
+    keep_keys = set(counts[counts >= min_views].index)
     df = df[df["combo_key"].isin(keep_keys)]
     if df.empty:
-        raise SystemExit(f"No combos with at least {MIN_VIEWS} images.")
+        raise SystemExit(f"No combos with at least {min_views} images.")
     samples = []
     for key, group in df.groupby("combo_key"):
         paths = group["Image_Path"].tolist()
@@ -394,6 +420,24 @@ def _save_attention_for_loader(loader, model, args, split_name: str, already_sav
     return saved_total
 
 
+def predict_tta(model, inputs, mask, n_aug: int = 16):
+    """Simple MIL TTA: rotate/flip valid views, average predictions."""
+    preds = []
+    for _ in range(n_aug):
+        aug_inputs = inputs.clone()
+        for b in range(inputs.size(0)):
+            for v in range(inputs.size(1)):
+                if mask[b, v]:
+                    img = aug_inputs[b, v]
+                    angle = torch.randint(-5, 6, (1,), device=inputs.device).item()
+                    img = tv_transforms.functional.rotate(img, angle)
+                    if torch.rand(1, device=inputs.device) > 0.5:
+                        img = tv_transforms.functional.hflip(img)
+                    aug_inputs[b, v] = img
+        preds.append(model(aug_inputs, mask))
+    return torch.stack(preds, dim=0).mean(dim=0)
+
+
 def main():
     args = parse_args()
     # Allow disabling scatter by passing an empty string
@@ -401,7 +445,7 @@ def main():
         args.test_scatter = None
     mode_desc = f"{'EVAL' if args.eval_only else 'TRAINING'} {'MIL' if args.method == 'mil' else f'Fusion ({args.fusion})'}"
     print(f"--- {mode_desc} (all views per combo): {', '.join(TARGET_COLS)} ---")
-    df = load_and_prepare()
+    df = load_and_prepare(min_views=args.min_views)
     groups = df["combo_key"]
     # report raw target stats before scaling
     raw_targets = np.vstack(df["targets"].to_list())
@@ -467,17 +511,27 @@ def main():
     val_samples = val_df.to_dict(orient="records")
     test_samples = test_df.to_dict(orient="records")
 
-    train_ds = MultiViewDataset(train_samples, TARGET_COLS, base_transform=base_train_tf)
-    val_ds = MultiViewDataset(val_samples, TARGET_COLS, base_transform=base_val_tf)
-    test_ds = MultiViewDataset(test_samples, TARGET_COLS, base_transform=base_val_tf)
-    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=0, collate_fn=collate_views)
-    val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=0, collate_fn=collate_views)
-    test_loader = DataLoader(test_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=0, collate_fn=collate_views)
+    effective_max_views = args.views_per_bag if args.views_per_bag is not None else args.max_views
+    if args.views_per_bag is not None:
+        # drop combos with fewer views than required
+        train_df = train_df[train_df["num_views"] >= args.views_per_bag].copy()
+        val_df = val_df[val_df["num_views"] >= args.views_per_bag].copy()
+        test_df = test_df[test_df["num_views"] >= args.views_per_bag].copy()
+    train_samples = train_df.to_dict(orient="records")
+    val_samples = val_df.to_dict(orient="records")
+    test_samples = test_df.to_dict(orient="records")
+
+    train_ds = MultiViewDataset(train_samples, TARGET_COLS, base_transform=base_train_tf, max_views=effective_max_views, fixed_views=args.views_per_bag)
+    val_ds = MultiViewDataset(val_samples, TARGET_COLS, base_transform=base_val_tf, max_views=effective_max_views, fixed_views=args.views_per_bag)
+    test_ds = MultiViewDataset(test_samples, TARGET_COLS, base_transform=base_val_tf, max_views=effective_max_views, fixed_views=args.views_per_bag)
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=0, collate_fn=collate_views)
+    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=0, collate_fn=collate_views)
+    test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False, num_workers=0, collate_fn=collate_views)
 
     if args.method == "fusion":
         model = EarlyFusionResNet(out_dim=len(TARGET_COLS)).to(DEVICE)
     else:
-        model = MILResNet(out_dim=len(TARGET_COLS)).to(DEVICE)
+        model = MILResNet(out_dim=len(TARGET_COLS), top_k=args.top_k).to(DEVICE)
     criterion = nn.MSELoss()
     backbone_frozen = False
     if args.freeze_epochs > 0:
@@ -495,24 +549,38 @@ def main():
             lr = trial.suggest_float("lr", 1e-5, 3e-4, log=True)
             wd = trial.suggest_float("weight_decay", 1e-6, 1e-2, log=True)
             batch_size = trial.suggest_categorical("batch_size", [4, 8])
-            trial_train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=0, collate_fn=collate_views)
-            trial_val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=0, collate_fn=collate_views)
+            mixup_alpha = trial.suggest_float("mixup_alpha", 0.0, 0.4)
+            trial_views = trial.suggest_categorical("views_per_bag", [4, 6, 8, 10, 12, 15])
+            trial_topk = trial.suggest_categorical("top_k", [3, 5, 7, 9])
+            # filter combos to those with enough views
+            trial_train_df = train_df[train_df["num_views"] >= trial_views]
+            trial_val_df = val_df[val_df["num_views"] >= trial_views]
+            if len(trial_train_df) == 0 or len(trial_val_df) == 0:
+                raise optuna.TrialPruned()
+            trial_train_ds = MultiViewDataset(trial_train_df.to_dict(orient="records"), TARGET_COLS, base_transform=base_train_tf, max_views=trial_views, fixed_views=trial_views)
+            trial_val_ds = MultiViewDataset(trial_val_df.to_dict(orient="records"), TARGET_COLS, base_transform=base_val_tf, max_views=trial_views, fixed_views=trial_views)
+            trial_train_loader = DataLoader(trial_train_ds, batch_size=batch_size, shuffle=True, num_workers=0, collate_fn=collate_views)
+            trial_val_loader = DataLoader(trial_val_ds, batch_size=batch_size, shuffle=False, num_workers=0, collate_fn=collate_views)
             if args.method == "fusion":
                 trial_model = EarlyFusionResNet(out_dim=len(TARGET_COLS)).to(DEVICE)
             else:
-                trial_model = MILResNet(out_dim=len(TARGET_COLS)).to(DEVICE)
+                trial_model = MILResNet(out_dim=len(TARGET_COLS), top_k=trial_topk).to(DEVICE)
             trial_ema = copy.deepcopy(trial_model)
             for p in trial_ema.parameters():
                 p.requires_grad_(False)
             optimizer = optim.AdamW(trial_model.parameters(), lr=lr, weight_decay=wd)
             scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.tune_epochs)
             best_val = float("inf")
+            best_epoch = 0
+            wait = 0
 
             for epoch in range(1, args.tune_epochs + 1):
                 trial_model.train()
                 running = 0.0
                 for inputs, targets, _ in trial_train_loader:
                     inputs, targets = inputs.to(DEVICE), targets.to(DEVICE)
+                    if mixup_alpha > 0:
+                        inputs, targets_a, targets_b, lam = mixup_batch(inputs, targets, mixup_alpha)
                     if args.method == "fusion":
                         if args.fusion == "early":
                             fused = inputs.mean(dim=1)
@@ -525,7 +593,10 @@ def main():
                     else:
                         mask = inputs.abs().sum(dim=(2, 3, 4)) > 0
                         outputs = trial_model(inputs, mask)
-                    loss = criterion(outputs, targets)
+                    if mixup_alpha > 0:
+                        loss = lam * criterion(outputs, targets_a) + (1 - lam) * criterion(outputs, targets_b)
+                    else:
+                        loss = criterion(outputs, targets)
                     optimizer.zero_grad()
                     loss.backward()
                     clip_grad_norm_(trial_model.parameters(), 1.0)
@@ -557,10 +628,19 @@ def main():
                         diff = outputs - targets
                         val_running += torch.mean(diff ** 2).item() * inputs.size(0)
                 val_loss = val_running / len(val_ds)
+                if val_loss < best_val:
+                    best_val = val_loss
+                    best_epoch = epoch
+                    wait = 0
+                else:
+                    wait += 1
                 best_val = min(best_val, val_loss)
                 trial.report(val_loss, epoch)
+                print(f"[TUNE][Trial {trial.number}] Epoch {epoch}/{args.tune_epochs} | lr={lr:.2e}, wd={wd:.2e}, bs={batch_size}, mixup={mixup_alpha:.3f} | val_mse={val_loss:.4f} | best={best_val:.4f} @ {best_epoch}")
                 if trial.should_prune():
                     raise optuna.TrialPruned()
+                if wait >= args.tune_patience:
+                    break
 
             return best_val
 
@@ -568,6 +648,17 @@ def main():
         study.optimize(objective, n_trials=args.tune_trials)
         print(f"[TUNE] Best trial value: {study.best_trial.value:.4f}")
         print(f"[TUNE] Best params: {study.best_trial.params}")
+        if args.tune_save:
+            save_obj = {
+                "best_value": study.best_trial.value,
+                "best_params": study.best_trial.params,
+                "best_trial": study.best_trial.number,
+                "trials": len(study.trials),
+            }
+            args.tune_save.parent.mkdir(parents=True, exist_ok=True)
+            with open(args.tune_save, "w") as f:
+                json.dump(save_obj, f, indent=2)
+            print(f"[TUNE] Saved best params to {args.tune_save}")
         return
 
     ema_model = copy.deepcopy(model)
@@ -581,7 +672,7 @@ def main():
         model.load_state_dict(state, strict=False)
         ema_model.load_state_dict(state, strict=False)
         print(f"[EVAL] Loaded weights from {args.checkpoint}")
-    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS, eta_min=args.eta_min)
 
     best_loss = float("inf")
@@ -632,6 +723,7 @@ def main():
             train_loss = running / len(train_ds)
 
             model.eval()
+            ema_model.eval()
             val_running = 0.0
             val_mae_running = 0.0
             val_true_raw = []
@@ -650,7 +742,7 @@ def main():
                             outputs = out_flat.view(b, v, -1).mean(dim=1)
                     else:
                         mask = inputs.abs().sum(dim=(2, 3, 4)) > 0
-                        outputs = ema_model(inputs, mask)
+                        outputs = predict_tta(ema_model, inputs, mask, n_aug=args.tta) if args.tta > 0 else ema_model(inputs, mask)
                     diff = outputs - targets
                     val_running += torch.mean(diff ** 2).item() * inputs.size(0)
                     val_mae_running += torch.mean(torch.abs(diff)).item() * inputs.size(0)
@@ -695,6 +787,7 @@ def main():
         best_state = copy.deepcopy(model.state_dict())
 
     # Final evaluation with EMA weights (or loaded weights in eval-only)
+    ema_model.eval()
     model.eval()
     val_running = 0.0
     val_mae_running = 0.0
@@ -714,7 +807,7 @@ def main():
                     outputs = out_flat.view(b, v, -1).mean(dim=1)
             else:
                 mask = inputs.abs().sum(dim=(2, 3, 4)) > 0
-                outputs = ema_model(inputs, mask)
+                outputs = predict_tta(ema_model, inputs, mask, n_aug=args.tta) if args.tta > 0 else ema_model(inputs, mask)
             diff = outputs - targets
             val_running += torch.mean(diff ** 2).item() * inputs.size(0)
             val_mae_running += torch.mean(torch.abs(diff)).item() * inputs.size(0)
@@ -760,7 +853,7 @@ def main():
                         outputs = out_flat.view(b, v, -1).mean(dim=1)
                 else:
                     mask = inputs.abs().sum(dim=(2, 3, 4)) > 0
-                    outputs = ema_model(inputs, mask)
+                    outputs = predict_tta(ema_model, inputs, mask, n_aug=args.tta) if args.tta > 0 else ema_model(inputs, mask)
                 diff = outputs - targets
                 test_running += torch.mean(diff ** 2).item() * inputs.size(0)
                 test_mae_running += torch.mean(torch.abs(diff)).item() * inputs.size(0)
