@@ -19,6 +19,8 @@ Inconsistent linkage between manually named slit-lamp image files and automated 
 This yielded a consolidated dataset of 332 patients and 15,912 slit-lamp images paired with valid OCT-derived ground-truth parameters.
 
 ### 4. View Categorization and Anatomical Normalization — Active Learning Labeling
+Anatomical view labeling of slit-lamp photographs is a common bottleneck due to large image volumes and the need for expert review. To reduce manual burden while maintaining label quality, we used a semi-supervised, human-in-the-loop active learning workflow that iteratively combined model-driven pseudo-labeling with targeted manual verification and correction.
+
 We used a 2-stage labeling scheme to make view labels consistent across eyes:
 
 1) **Image-space view (`View_Image`)** — manually assigned per image using a custom keyboard-driven GUI (`slit-project/code/label_gui.py`):
