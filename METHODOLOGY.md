@@ -18,52 +18,59 @@ Inconsistent linkage between manually named slit-lamp image files and automated 
 
 This yielded a consolidated dataset of 332 patients and 15,912 slit-lamp images paired with valid OCT-derived ground-truth parameters.
 
-### 4. Baseline Benchmark Model (First-Step Results)
-Before view labeling and ROI standardization, a minimal baseline quantified predictability of OCT parameters from raw slit-lamp images:
-- **Input:** Original slit-lamp images with standard resizing only (no beam/angle localization; no view-specific ROIs), processed one image at a time.
-- **Labeling:** All images from the same eye share the same OCT-derived ground truth (label duplication at the image level).
-- **Backbone/Loss:** ResNet-50 (ImageNet-pretrained) with Huber loss for robustness to outliers.
-- **Training:** Loss computed per image (no train-time view aggregation); effective batch increased via gradient accumulation when memory-limited.
-- **Evaluation:** Primary reporting is per-image metrics (MAE/MSE/RMSE, z-scored and raw, Pearson r) to match the training regime. A secondary, practical view can be obtained by averaging predictions per eye at test time to see the gain from naive aggregation.
+### 4. View Categorization and Anatomical Normalization — Active Learning Labeling
+We used a 2-stage labeling scheme to make view labels consistent across eyes:
 
-This image-level baseline on view-mixed inputs provides a conservative reference prior to view-aware modeling.
+1) **Image-space view (`View_Image`)** — manually assigned per image using a custom keyboard-driven GUI (`slit-project/code/label_gui.py`):
+   - `center`, `left`, `right`, `no_slit`, `other`
 
-### 5. View Categorization (Center vs Peripheral; Left vs Right) — Semi-Supervised Labeling
-Views were categorized into three classes: Center; Van Herick – Left; Van Herick – Right. Workflow:
-- **Seed Manual Annotation:** ~1,400 images labeled.
-- **Supervised View Classifier:** Trained with grouped splits by eye_clean to avoid leakage.
-- **Pseudo-Labeling:** Applied to unlabeled pool; high-confidence predictions accepted.
-- **Iterative Spot-Checking:** Ambiguous cases reviewed; model refreshed.
-- **Final Tables:** Separate curated tables for center-related targets (ACD, CCT, LV, LT, ATA) and peripheral targets (AOD*, TISA*, TIA500, ARA*).
+2) **Anatomical view (`View_Label`)** — derived from `View_Image` using eye laterality (`eye_clean`):
+   - `center` → `center`
+   - `no_slit` → `no_slit`
+   - `other` → `other`
+   - For **OD**: `left` → `van_temporal`, `right` → `van_nasal`
+   - For **OS**: `left` → `van_nasal`, `right` → `van_temporal`
 
-### 6. ROI Cropping from Original High-Resolution Slit-Lamp Images (Center Class)
-- **Problem:** Center-class images vary (center, paracenter, marginal pupil); beam not always centered.
-- **Beam Localization:** CLAHE, top-hat filtering, vertical-line enhancement, column-wise projection to find beam_x.
-- **ROI:** Beam-centered crop:
-  - ROI width fraction: 0.45 of original width.
-  - Vertical crop: y_top_frac = 0.12, y_bot_frac = 0.92.
-- **Resizing:** ROIs resized to 448×448 (or 384×384).
-- **QC:** Debug overlays (beam line + ROI box) for 50 samples before full run.
-- **Note:** off_center_score computed/stored but not used for pruning.
+All labels were stored in `slit-project/code/labels_output.csv` (columns: `Image_Path`, `View_Image`, `View_Label`, `eye_clean`). During labeling, skipped images were left blank to avoid accidental class assignment; the final dataset was fully labeled (15,912 images).
 
-### 7. Predictive Modeling for Central Biometry (ACD/CCT/LV/LT/ATA)
-#### 7.1 Backbone Selection (10-Epoch Screening)
-Multiple backbones (ResNet, EfficientNet, Swin, etc.) trained for 10 epochs with identical grouped splits and augmentation; ConvNeXt-Tiny showed best generalization and stability and was selected.
+To scale annotation from an initial seed set to the full dataset, we used an iterative **active learning + semi-supervised** loop (`slit-project/code/active_learning_view_pipeline.py`):
+- Train a lightweight view classifier (EfficientNet-B0) on the current labeled set (stratified train/val split).
+- Score the unlabeled pool and compute prediction confidence and ambiguity via the margin (top1 − top2).
+- Accept pseudo-labels when `pred_conf ≥ 0.9` and `margin ≥ 0.15`; export the remaining lowest-confidence / lowest-margin images for manual review.
+- Manually review and correct both “low-confidence” and sampled “high-confidence” predictions, update `labels_output.csv`, and repeat.
 
-#### 7.2 Regression Model
-- **Input:** Beam-centered ROI crops, resized to 448×448 (or 384×384 if needed).
-- **Backbone:** ConvNeXt-Tiny (ImageNet-pretrained).
-- **Head:** Regression layer per target.
+In early iterations, we scored small subsets of unlabeled images (e.g., 666 per round) to keep review manageable; as label coverage increased, we expanded to scoring the full remaining unlabeled pool. In the final iteration, 5,529 images remained unlabeled; the classifier produced 5,307 high-confidence pseudo-labels and flagged 222 low-confidence examples for manual correction.
 
-#### 7.3 Training Protocol and Split
-- Grouped splits by eye_clean (patient/eye) to prevent leakage.
-- Loss: Huber (tuned delta in later runs).
-- Mild geometric/photometric augmentations; gradient clipping.
-- Metrics: MSE and MAE (z-scored and raw units).
-- Hyperparameter search: Optuna sweeps (lr, weight decay, batch size 4/8) on grouped validation MSE to choose a reasonable baseline configuration before longer training runs.
+Final label distribution (all 15,912 images): `center` 3,769; `van_nasal` 6,144; `van_temporal` 5,383; `no_slit` 259; `other` 357. For reproducibility, the exact workflow and commands are documented in `slit-project/labeling_readme.md`.
+
+### 5. Model Training (Multi-View Regression)
+After view labeling, we trained regression models to predict OCT-derived targets from slit-lamp images, using grouped splits at the patient/eye level to avoid leakage. Our main implementation for ACD uses a multi-view ResNet-50 with fusion or MIL attention pooling (`slit-project/code/fusion_acd_center_baseline.py`).
+
+#### 5.1 View-Stratified Training Sets
+We used `View_Label` to select the appropriate subset of images for each target family:
+- **Center-view targets** (e.g., ACD): trained on images with `View_Label == center`.
+- **Peripheral targets** (e.g., nasal/temporal angle parameters): trained on images with `View_Label ∈ {van_nasal, van_temporal}`.
+
+#### 5.2 Multi-View Input and Grouping
+Multiple slit-lamp images often exist per patient/eye. We grouped images into a “bag” using a patient/eye key extracted from the filename prefix (`patient_eye_*`). Each bag contains up to `MAX_VIEWS` images (randomly subsampled if more are available). Targets were aggregated per bag by taking the mean across rows (OCT targets are constant per eye in practice).
+
+#### 5.3 Model Architecture (ResNet-50 Fusion / MIL)
+We used an ImageNet-pretrained ResNet-50 backbone with two alternative ways to combine multi-view information:
+- **Fusion**: early fusion averages the per-view image tensors before the backbone; late fusion averages per-view predictions.
+- **MIL attention pooling**: extracts per-view feature vectors, learns attention weights over views, and computes a weighted bag representation before the regression head.
+
+The regression head outputs one or more continuous targets (e.g., ACD only).
+
+#### 5.4 Training Protocol and Evaluation
+- **Split**: GroupShuffleSplit by patient/eye (test fraction 0.15; validation fraction 0.15 of remaining).
+- **Target scaling**: StandardScaler fit on train targets; training loss computed in z-space; metrics reported in both z-space and raw units (inverse transformed).
+- **Loss/metrics**: MSE loss on standardized targets; report MSE/MAE/RMSE (raw and z-scored) and Pearson r.
+- **Optimization**: AdamW (lr 5e-4, weight decay 5e-3) with cosine annealing (eta_min 1e-6); gradient clipping (1.0); up to 40 epochs.
+- **Augmentation**: mild geometric/photometric augmentations (resize + center crop, small rotation/affine, color jitter, occasional blur) and ImageNet normalization.
+- **Regularization**: mixup (α=0.2), EMA weight averaging (decay 0.999), and early stopping (min_delta 0.005; patience configured per run).
 
 ### References
 - Levenshtein, V. I. (1966). Binary codes capable of correcting deletions, insertions, and reversals. Soviet Physics Doklady, 10(8), 707–710.
 - Deng, J., et al. (2009). ImageNet: A large-scale hierarchical image database. CVPR, 248–255.
 - MacQueen, J. (1967). Some methods for classification and analysis of multivariate observations. Berkeley Symposium, 281–297.
-- Liu, Z., et al. (2022). A ConvNet for the 2020s (ConvNeXt). CVPR.
+- He, K., Zhang, X., Ren, S., & Sun, J. (2016). Deep residual learning for image recognition. CVPR.
