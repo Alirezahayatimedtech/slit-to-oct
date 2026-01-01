@@ -65,11 +65,11 @@ In clinical settings, multiple slit-lamp photographs are often captured per eye 
 The regression head outputs one or more continuous targets (e.g., ACD only).
 
 #### 5.4 Training Protocol and Evaluation
-- **Split**: GroupShuffleSplit by patient/eye (test fraction 0.15; validation fraction 0.15 of remaining).
+- **Split**: GroupShuffleSplit by patient/eye to prevent patient leakage (all images from the same eye are confined to a single split); test fraction 0.15 and validation fraction 0.15 of the remaining data.
 - **Target scaling**: StandardScaler fit on train targets; training loss computed in z-space; metrics reported in both z-space and raw units (inverse transformed).
 - **Loss/metrics**: MSE loss on standardized targets; report MSE/MAE/RMSE (raw and z-scored) and Pearson r.
 - **Optimization**: AdamW (lr 5e-4, weight decay 5e-3) with cosine annealing (eta_min 1e-6); gradient clipping (1.0); up to 40 epochs.
-- **Augmentation**: mild geometric/photometric augmentations (resize + center crop, small rotation/affine, color jitter, occasional blur) and ImageNet normalization.
+- **Augmentation**: mild geometric/photometric augmentations (resize + center crop, small rotation/affine, color jitter, occasional blur) and ImageNet normalization; augmented samples were visually inspected to ensure transformations preserved anatomy and did not introduce artifacts.
 - **Regularization**: mixup (α=0.2), EMA weight averaging (decay 0.999), and early stopping (min_delta 0.005; patience configured per run).
 
 ### References
