@@ -67,7 +67,7 @@ NUM_EPOCHS = 40
 LEARNING_RATE = 5e-4
 WEIGHT_DECAY = 5e-3
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-PATIENCE = 10
+PATIENCE = 6
 MIN_DELTA = 0.005
 EMA_DECAY = 0.999
 VAL_FRACTION = 0.15
@@ -127,7 +127,6 @@ def parse_args():
     p.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Batch size for training/eval.")
     p.add_argument("--lr", type=float, default=LEARNING_RATE, help="Learning rate for main training.")
     p.add_argument("--weight-decay", type=float, default=WEIGHT_DECAY, help="Weight decay for main training.")
-    p.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility.")
     return p.parse_args()
 
 
@@ -441,11 +440,6 @@ def predict_tta(model, inputs, mask, n_aug: int = 16):
 
 def main():
     args = parse_args()
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(args.seed)
     # Allow disabling scatter by passing an empty string
     if args.test_scatter and str(args.test_scatter).strip() == "":
         args.test_scatter = None
@@ -496,11 +490,10 @@ def main():
         [
             transforms.Resize(int(IMG_SIZE * 1.05)),
             transforms.CenterCrop(IMG_SIZE),
-            transforms.RandomHorizontalFlip(p=0.5),
-            transforms.RandomRotation(degrees=8),
-            transforms.ColorJitter(brightness=0.15, contrast=0.15, saturation=0.1),
-            transforms.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
-            transforms.RandomApply([transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.5))], p=0.1),
+            transforms.RandomRotation(degrees=3),
+            transforms.ColorJitter(brightness=0.08, contrast=0.08),
+            transforms.RandomAffine(degrees=0, translate=(0.05, 0.05)),
+            transforms.RandomApply([transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.0))], p=0.02),
             transforms.ToTensor(),
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ]
@@ -539,7 +532,7 @@ def main():
         model = EarlyFusionResNet(out_dim=len(TARGET_COLS)).to(DEVICE)
     else:
         model = MILResNet(out_dim=len(TARGET_COLS), top_k=args.top_k).to(DEVICE)
-    criterion = nn.SmoothL1Loss(beta=1.0)
+    criterion = nn.MSELoss()
     backbone_frozen = False
     if args.freeze_epochs > 0:
         freeze_backbone(model)
