@@ -46,7 +46,7 @@ In early iterations, we scored small subsets of unlabeled images (e.g., 666 per 
 Final label distribution (all 15,912 images): `center` 3,769; `van_nasal` 6,144; `van_temporal` 5,383; `no_slit` 259; `other` 357. For reproducibility, the exact workflow and commands are documented in `slit-project/labeling_readme.md`.
 
 ### 5. Model Training (Multi-View Regression)
-After view labeling, we trained regression models to predict OCT-derived targets from slit-lamp images, using grouped splits at the patient/eye level to avoid leakage. Our main implementation for ACD uses a multi-view ResNet-50 with fusion or MIL attention pooling (`slit-project/code/fusion_acd_center_baseline.py`).
+After view labeling, we trained regression models to predict OCT-derived targets from slit-lamp images, using grouped splits at the patient/eye level to avoid leakage. Our main implementation for ACD uses a multi-view ResNet-50 with attention-based multiple-instance learning (MIL) pooling (`slit-project/code/fusion_acd_center_baseline.py`).
 
 #### 5.1 View-Stratified Training Sets
 We used `View_Label` to select the appropriate subset of images for each target family:
@@ -56,10 +56,11 @@ We used `View_Label` to select the appropriate subset of images for each target 
 #### 5.2 Multi-View Input and Grouping
 Multiple slit-lamp images often exist per patient/eye. We grouped images into a “bag” using a patient/eye key extracted from the filename prefix (`patient_eye_*`). Each bag contains up to `MAX_VIEWS` images (randomly subsampled if more are available). Targets were aggregated per bag by taking the mean across rows (OCT targets are constant per eye in practice).
 
-#### 5.3 Model Architecture (ResNet-50 Fusion / MIL)
-We used an ImageNet-pretrained ResNet-50 backbone with two alternative ways to combine multi-view information:
-- **Fusion**: early fusion averages the per-view image tensors before the backbone; late fusion averages per-view predictions.
-- **MIL attention pooling**: extracts per-view feature vectors, learns attention weights over views, and computes a weighted bag representation before the regression head.
+#### 5.3 Model Architecture (ResNet-50 MIL Attention Pooling)
+In clinical settings, multiple slit-lamp photographs are often captured per eye across different viewpoints/illumination, while the OCT-derived target is defined at the eye level. To leverage all available images without discarding data, we used multiple-instance learning (MIL) with attention pooling:
+- Each view is encoded by a shared ImageNet-pretrained ResNet-50 feature extractor.
+- An attention module assigns a weight to each view; a weighted sum yields a bag-level representation.
+- A regression head predicts the target(s) from the bag representation.
 
 The regression head outputs one or more continuous targets (e.g., ACD only).
 
