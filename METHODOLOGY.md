@@ -11,7 +11,7 @@ This retrospective dataset comprises multimodal anterior segment data collected 
   - **Peripheral/Angle parameters (Van Herick view related):** Angle Opening Distance (AOD250/500/750), Trabecular-Iris Space Area (TISA250/500/750), Trabecular-Iris Angle (TIA500), Angle Recess Area (ARA250/500).
 
 #### 3.2 Data Integration and Patient/Eye Matching
-Inconsistent linkage between manually named slit-lamp image files and automated OCT exports reduced usable data. A hierarchical multi-stage linkage pipeline was used:
+Inconsistent linkage between manually named slit-lamp image files and automated OCT exports reduced usable data. This is a common workflow issue in clinical datasets, since slit-lamp photography and AS-OCT acquisition are often performed by different operators at different times, and naming typos/inconsistencies can occur. A hierarchical multi-stage linkage pipeline was used:
 - **Deterministic Matching:** Records with a unique 9-digit patient identifier linked directly.
 - **Probabilistic Matching:** For records without reliable IDs, fuzzy string matching (Levenshtein distance) associated slit-lamp entries and OCT records; similarity threshold 80% to accept candidates.
 - **Human-in-the-Loop Verification:** Candidates in the 60–80% similarity range were manually reviewed.
