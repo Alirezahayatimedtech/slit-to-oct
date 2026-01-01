@@ -2,7 +2,7 @@
 
 ### 3. Data Acquisition and Preprocessing
 #### 3.1 Data Sources
-This retrospective dataset comprises multimodal anterior segment data collected from [Insert Hospital/Clinic Name]. The dataset includes:
+This retrospective dataset comprises multimodal anterior segment data collected at Farabi Eye Hospital. The dataset includes:
 - **Slit-Lamp Photography (2D RGB):** Standard anterior segment examinations captured under multiple illumination/view settings, including:
   - Central optical section / pupil-containing views (center, paracenter, and marginal pupil variants but still within the pupil region).
   - Peripheral Van Herick technique views (left and right peripheral/limbal views).
