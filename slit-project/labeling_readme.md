@@ -46,8 +46,4 @@ Repeat each round:
 - Iter6 (latest run, 9 epochs): scored all 5,529 remaining unlabeled images; produced 5,307 high-confidence pseudo labels and 222 low-confidence rows (`outputs/active_learning_iter6/`).
 - Current label counts in `labels_output.csv` (approx.): center 2,612; van_nasal 3,852; van_temporal 3,461; other 284; no_slit 174; unlabeled ~5,529.
 
-## VS Code tips
-- Open the workspace folder (`RETFound_GeneLab`) and pick the `awg` Python interpreter.
-- Use the integrated terminal for the commands above.
-- Preview large CSVs via VS Code's built-in “Open Preview” or a CSV viewer extension; filter/sort to review `low_conf_predictions.csv`.
-- Keep `labels_output.csv` under version control for traceability; commit after each review round.
+
