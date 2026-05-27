@@ -117,7 +117,7 @@ Secondary endpoints:
 - QC-gated performance after rejecting poor-quality or non-slit images.
 - Subgroup performance by age, sex, eye side, view label, baseline ACD strata, and acquisition/device metadata if available.
 
-The primary operating threshold is selected on the validation split using the Youden index and then applied once to the locked test split. A high-specificity threshold targeting 95% specificity on the validation split is reported as a prespecified co-primary operating point.
+The primary operating threshold is selected and evaluated on the validation split using the Youden index. A high-specificity threshold targeting 95% specificity on the validation split is reported as a prespecified secondary operating point. Because the current cohort is small and closed-angle cases are rare, the fixed-split analysis uses patient-level train/validation separation only rather than reserving a small third internal test partition.
 
 ### 2.5 Model Inputs and Baselines
 
@@ -135,12 +135,14 @@ The implemented model uses a ConvNeXt-Tiny image encoder pretrained on ImageNet,
 
 All model development and validation must use participant-level separation. Both eyes and all repeated images from the same participant must remain in the same split for inference-level claims.
 
+The active fixed-split manuscript workflow uses an 80/20 participant-level train/validation split, stratified by participant-level angle-closure status. This validation set is the internal validation cohort for threshold selection and performance reporting. Patient-level cross-validation can be reported as a robustness analysis, but no separate internal test set is reserved in the current primary method.
+
 Required output before final analysis:
 
 - `paper2_runs/angle_closure_screening/split_manifest.csv`
 - `paper2_runs/angle_closure_screening/split_manifest_summary.md`
 
-The implemented manifest includes participant ID, eye side, split name, angle grade, closure label, image count, usable view count, AS-OCT target availability, and clinical metadata fields. In the current linked data, the prepared split contains 529 eyes from 267 participants, with 368 train eyes, 80 validation eyes, and 81 locked test eyes, and no participant overlap across splits.
+The implemented manifest includes participant ID, eye side, split name, angle grade, closure label, image count, usable view count, AS-OCT target availability, and clinical metadata fields. Final train/validation counts must be regenerated from the frozen 80/20 manifest before manuscript submission.
 
 ### 2.7 Statistical Analysis
 
@@ -157,7 +159,7 @@ Classification / triage performance should include:
 
 Regression performance for secondary AS-OCT biomarker heads should include MAE, RMSE, bias, Pearson correlation, and R2 for each target with available labels.
 
-All uncertainty estimates should account for participant-level clustering. Bootstrap resampling should resample participants, not individual eyes or image rows. Model development must be frozen before the locked test set is evaluated. Two-sided P values below 0.05 will be considered statistically significant, with exploratory wording for small subgroup and model-comparison analyses.
+All uncertainty estimates should account for participant-level clustering. Bootstrap resampling should resample participants, not individual eyes or image rows. The fixed-split analysis should be described as internal validation/model development unless a truly external or prospectively locked test cohort becomes available. Two-sided P values below 0.05 will be considered statistically significant, with exploratory wording for small subgroup and model-comparison analyses.
 
 ### 2.8 Quality-Control Gate and Refuse-to-Predict Policy
 

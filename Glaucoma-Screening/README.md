@@ -9,6 +9,24 @@ The current project should be framed as angle-closure or narrow-angle referral
 triage, not broad glaucoma diagnosis. The available endpoint is eye-level
 gonioscopic Shaffer angle grade, supported by AS-OCT anterior segment biomarkers.
 
+## Current Validation Method
+
+The active manuscript method is now **patient-level train/validation only**, not
+a separate held-out test split:
+
+- Train: 80% of participants.
+- Validation: 20% of participants.
+- Stratification: angle-closure label at participant level.
+- Leakage rule: both eyes and all images from the same participant stay in one
+  split.
+- Threshold selection and reported internal performance are based on validation.
+- The paper should describe this as internal validation/model development, not
+  locked-test evidence.
+
+Patient-level cross-validation can still be reported as a robustness analysis,
+but the main fixed-split workflow should not reserve a third test set unless an
+external or truly locked cohort becomes available.
+
 Primary binary label:
 
 - Positive: Shaffer grade `0` or `1`.
@@ -29,6 +47,7 @@ Key fixed-split and search summaries are in `results/`:
 - `baseline_search_summary.md`
 - `baseline_search_summary.csv`
 - `goal70_cv_findings.md`
+- `resnet50_anatomy_stack_80_20_findings.md`
 - `roi_shared_split_findings.md`
 - `split_manifest_summary.md`
 - `split_manifest_summary.csv`
@@ -53,3 +72,8 @@ stable sensitivity >=0.70 and specificity >=0.70 in patient-level 5-fold
 validation. The defensible current claim is high-sensitivity angle-closure
 referral triage, not a balanced open/closed angle classifier.
 
+The newest fast 80/20 train-validation experiment found a better development
+signal from a regression-only ResNet-50 anatomy stack. Excluding Shaffer grade
+`2` as a borderline sensitivity analysis reached validation sensitivity `0.800`
+and specificity `0.709` when the threshold was balanced internally on
+validation. This is development evidence, not locked-test evidence.

@@ -74,11 +74,31 @@ Current decision:
 - The active binary task is strict angle closure: grade `0/1` versus grade `2/3/4`.
 - The temporary grade `0/1/2` positive definition is not used for the current Paper 2 baseline.
 
-## 4. Frozen Split
+## 4. Current Validation Design
 
-All current angle-closure runs use patient-level splitting. Both eyes from one participant stay in the same split.
+The current manuscript method should use patient-level **train/validation
+splitting only**, not a separate internal test set. This matches the revised
+strategy that the available cohort is too small for three stable partitions,
+especially because closed-angle cases are rare.
 
-Split manifest:
+Active fixed-split plan:
+
+- Train: 80% of participants.
+- Validation: 20% of participants.
+- Stratification: participant-level angle-closure status.
+- Leakage control: both eyes and all repeated images from a participant remain
+  in the same split.
+- Operating thresholds are selected on validation.
+- Reported fixed-split performance is internal validation performance, not
+  locked-test performance.
+
+Patient-level cross-validation may be reported as a secondary robustness
+analysis. If cross-validation is used, each fold must keep all eyes and all
+images from the same participant together. A separate test set should be used
+only if a genuinely external, prospective, or otherwise locked cohort becomes
+available.
+
+Previous fixed 70/15/15 split manifest, kept here as historical context:
 
 - `paper2_runs/angle_closure_screening/split_manifest.csv`
 - `paper2_runs/angle_closure_screening/split_manifest_summary.md`
@@ -97,10 +117,13 @@ Leakage check:
 - Train/test overlap: 0 participants.
 - Validation/test overlap: 0 participants.
 
-Major statistical limitation:
+Major statistical limitation of the older 70/15/15 design:
 
 - Locked test has only 8 closed-angle eyes from 4 positive participants.
 - Confidence intervals for classification metrics must be expected to be wide.
+- This is the reason the current method is being revised to 80/20
+  train/validation plus optional patient-level cross-validation rather than a
+  small third test partition.
 
 ## 5. Implemented Model
 
