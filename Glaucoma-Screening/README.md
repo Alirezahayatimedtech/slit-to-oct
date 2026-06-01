@@ -86,3 +86,8 @@ The follow-up 5-fold continuous-regression experiments are documented in
 frozen-backbone 5-fold runs did not stably reach sensitivity >=0.70 and
 specificity >=0.70. Shaffer-grade regression alone was weaker, and the fixed
 predicted-grade threshold `<=1.5` was not calibrated enough to use directly.
+
+The newest ConvNeXt-Tiny anatomy-stack comparison modestly improved the strict
+`0/1` versus `2/3/4` frozen-backbone CV result over ResNet-50, but still did not
+reach stable 70/70. It should be treated as the current best strict-label
+backbone signal, not as a final clinically sufficient model.

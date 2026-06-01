@@ -180,15 +180,63 @@ result is not consistently above 70/70. The earlier 80/20 result of sensitivity
 `0.800` and specificity `0.709` was a useful development signal but is not yet a
 stable CV result.
 
+## Experiment 4: ConvNeXt-Tiny Anatomy Regression Stack
+
+Run paths:
+
+```text
+slit-project/paper2_runs/exp4_convnext_tiny_anatomy_stack_cv_complete476/
+slit-project/paper2_runs/exp4_convnext_tiny_anatomy_stack_cv_exclude_grade2/
+```
+
+Method:
+
+- Same anatomy-regression plus logistic-risk stack as Experiment 3.
+- Backbone changed from ResNet-50 to ConvNeXt-Tiny.
+- ImageNet-pretrained backbone, frozen for this quick comparison.
+- Same 10 AS-OCT targets, patient-level 5-fold CV, and threshold rules.
+
+Strict `0/1` versus `2/3/4` summary:
+
+| Threshold rule | AUROC | AUPRC | Sensitivity | Specificity | Balanced min |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Threshold from training folds | 0.655 | 0.180 | 0.588 | 0.686 | 0.536 |
+| Threshold balanced on validation fold | 0.655 | 0.180 | 0.657 | 0.642 | 0.616 |
+
+Grade-2-excluded summary:
+
+| Threshold rule | AUROC | AUPRC | Sensitivity | Specificity | Balanced min |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Threshold from training folds | 0.638 | 0.173 | 0.422 | 0.714 | 0.422 |
+| Threshold balanced on validation fold | 0.638 | 0.173 | 0.700 | 0.600 | 0.568 |
+
+Best individual strict-label fold:
+
+- Fold 3 with validation-balanced threshold reached sensitivity `0.778` and
+  specificity `0.714`.
+
+Best individual grade-2-excluded fold:
+
+- Fold 4 with validation-balanced threshold reached sensitivity `0.667` and
+  specificity `0.824`.
+
+Conclusion: ConvNeXt-Tiny modestly improved the strict-label anatomy stack over
+the frozen ResNet-50 version, especially for training-derived threshold balance
+(`0.536` versus `0.430` balanced-min). It still did not reach stable 70/70 in
+5-fold CV. In the grade-2-excluded sensitivity run, ConvNeXt-Tiny did not improve
+over ResNet-50.
+
 ## Main Comparison
 
 Current ranking of signals:
 
 1. Anatomy-regression stack is the strongest approach overall.
-2. Grade-2 exclusion improves some metrics and supports the label-noise
-   hypothesis, but it does not fully solve the problem in 5-fold CV.
-3. Shaffer grade regression alone is weaker than anatomy regression.
-4. The literal predicted-grade threshold `<=1.5` is not usable without
+2. ConvNeXt-Tiny is the best strict-label frozen-backbone variant so far, but
+   the gain over ResNet-50 is modest and not enough for stable 70/70.
+3. Grade-2 exclusion supports the label-noise hypothesis, but it does not fully
+   solve the problem in 5-fold CV.
+4. Shaffer grade regression alone is weaker than anatomy regression.
+5. The literal predicted-grade threshold `<=1.5` is not usable without
    calibration because the regressor is not calibrated on the clinical grade
    scale.
 

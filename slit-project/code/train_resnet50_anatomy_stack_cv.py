@@ -60,7 +60,7 @@ IMAGENET_STD = [0.229, 0.224, 0.225]
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="ResNet-50 anatomy-regression stacker for angle closure.")
+    p = argparse.ArgumentParser(description="Anatomy-regression stacker for angle closure.")
     p.add_argument("--image-csv", type=Path, default=PROJECT_ROOT / "code" / "ready_for_training_clustered_anatomical_with_means_with_views_anonymized.csv")
     p.add_argument("--clinical-csv", type=Path, default=PROJECT_ROOT / "code" / "ready_for_upload_publish.csv")
     p.add_argument("--outdir", type=Path, default=PROJECT_ROOT / "paper2_runs" / "resnet50_anatomy_stack_cv")
@@ -72,6 +72,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--num-workers", type=int, default=2)
     p.add_argument("--img-size", type=int, default=224)
+    p.add_argument("--backbone", choices=["resnet50", "convnext_tiny"], default="resnet50")
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--weight-decay", type=float, default=1e-4)
     p.add_argument("--patience", type=int, default=3)
@@ -205,8 +206,8 @@ def write_label_audit(df: pd.DataFrame, args: argparse.Namespace) -> None:
     with open(args.outdir / "experiment_config.json", "w", encoding="utf-8") as f:
         json.dump({**vars(args), **summary}, f, indent=2, default=str)
     with open(args.outdir / "README.md", "w", encoding="utf-8") as f:
-        f.write("# ResNet-50 Anatomy Stack CV\n\n")
-        f.write("Regression-only ResNet-50 predicts 10 AS-OCT anatomical parameters. ")
+        f.write("# Anatomy Stack CV\n\n")
+        f.write(f"Regression-only `{args.backbone}` predicts 10 AS-OCT anatomical parameters. ")
         f.write("A logistic regression then classifies strict angle closure from predicted anatomy.\n\n")
         f.write(f"- Images: {summary['rows_images']}\n")
         f.write(f"- Eyes: {summary['eyes']}\n")
@@ -238,13 +239,21 @@ class ImageAnatomyDataset(Dataset):
         return self.tfm(img), torch.tensor(self.y[idx], dtype=torch.float32), int(row["image_id"])
 
 
-class ResNet50Regressor(nn.Module):
-    def __init__(self, out_dim: int, pretrained: bool = True, freeze_backbone: bool = False):
+class ImageRegressor(nn.Module):
+    def __init__(self, out_dim: int, backbone: str = "resnet50", pretrained: bool = True, freeze_backbone: bool = False):
         super().__init__()
-        weights = models.ResNet50_Weights.IMAGENET1K_V2 if pretrained else None
-        base = models.resnet50(weights=weights)
-        hidden = base.fc.in_features
-        base.fc = nn.Identity()
+        if backbone == "resnet50":
+            weights = models.ResNet50_Weights.IMAGENET1K_V2 if pretrained else None
+            base = models.resnet50(weights=weights)
+            hidden = base.fc.in_features
+            base.fc = nn.Identity()
+        elif backbone == "convnext_tiny":
+            weights = models.ConvNeXt_Tiny_Weights.IMAGENET1K_V1 if pretrained else None
+            base = models.convnext_tiny(weights=weights)
+            hidden = base.classifier[2].in_features
+            base.classifier = nn.Identity()
+        else:
+            raise ValueError(f"Unsupported backbone: {backbone}")
         self.backbone = base
         if freeze_backbone:
             for p in self.backbone.parameters():
@@ -252,7 +261,10 @@ class ResNet50Regressor(nn.Module):
         self.head = nn.Sequential(nn.Dropout(0.2), nn.Linear(hidden, out_dim))
 
     def forward(self, x):
-        return self.head(self.backbone(x))
+        feat = self.backbone(x)
+        if feat.ndim > 2:
+            feat = torch.flatten(feat, 1)
+        return self.head(feat)
 
 
 def make_transforms(img_size: int):
@@ -550,7 +562,12 @@ def run_fixed_split(
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
-    model = ResNet50Regressor(len(target_cols), pretrained=not args.no_pretrained, freeze_backbone=args.freeze_backbone).to(device)
+    model = ImageRegressor(
+        len(target_cols),
+        backbone=args.backbone,
+        pretrained=not args.no_pretrained,
+        freeze_backbone=args.freeze_backbone,
+    ).to(device)
     optimizer = optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=args.lr, weight_decay=args.weight_decay)
     amp_scaler = torch.amp.GradScaler("cuda", enabled=args.amp and device.type == "cuda")
     best_state = None
@@ -563,7 +580,7 @@ def run_fixed_split(
         if val_loss < best_loss:
             best_loss = val_loss
             best_state = copy.deepcopy(model.state_dict())
-            torch.save({"model": best_state, "targets": target_cols, "args": vars(args)}, split_dir / "resnet50_anatomy.pt")
+            torch.save({"model": best_state, "targets": target_cols, "args": vars(args)}, split_dir / f"{args.backbone}_anatomy.pt")
             wait = 0
         else:
             wait += 1
@@ -675,8 +692,8 @@ def run_fixed_split(
         ci.to_csv(split_dir / "fixedsplit_best_test_bootstrap_ci.csv", index=False)
 
     with open(args.outdir / "RESULTS.md", "w", encoding="utf-8") as f:
-        f.write("# ResNet-50 Anatomy Stack Fixed-Split Results\n\n")
-        f.write("Regression-only ResNet-50 predicts 10 AS-OCT anatomical parameters. ")
+        f.write("# Anatomy Stack Fixed-Split Results\n\n")
+        f.write(f"Regression-only `{args.backbone}` predicts 10 AS-OCT anatomical parameters. ")
         f.write("A balanced logistic regression then classifies strict angle closure from predicted anatomy. ")
         f.write("The stacker is fit on train eyes; threshold selection is based on validation eyes only.\n\n")
         f.write("Split summary:\n\n")
@@ -731,7 +748,12 @@ def run(args: argparse.Namespace) -> None:
         val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
         train_pred_loader = DataLoader(ImageAnatomyDataset(train_df, target_cols, scaler_y, eval_tfm), batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
-        model = ResNet50Regressor(len(target_cols), pretrained=not args.no_pretrained, freeze_backbone=args.freeze_backbone).to(device)
+        model = ImageRegressor(
+            len(target_cols),
+            backbone=args.backbone,
+            pretrained=not args.no_pretrained,
+            freeze_backbone=args.freeze_backbone,
+        ).to(device)
         optimizer = optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=args.lr, weight_decay=args.weight_decay)
         amp_scaler = torch.amp.GradScaler("cuda", enabled=args.amp and device.type == "cuda")
         best_state = None
@@ -744,7 +766,7 @@ def run(args: argparse.Namespace) -> None:
             if val_loss < best_loss:
                 best_loss = val_loss
                 best_state = copy.deepcopy(model.state_dict())
-                torch.save({"model": best_state, "targets": target_cols, "args": vars(args)}, fold_dir / "resnet50_anatomy.pt")
+                torch.save({"model": best_state, "targets": target_cols, "args": vars(args)}, fold_dir / f"{args.backbone}_anatomy.pt")
                 wait = 0
             else:
                 wait += 1
@@ -816,7 +838,7 @@ def run(args: argparse.Namespace) -> None:
     summary = metrics[["auroc", "auprc", "sensitivity", "specificity", "ppv", "npv", "accuracy", "balanced_min"]].agg(["mean", "std", "min", "max"]).T
     summary.to_csv(args.outdir / "metric_summary.csv")
     with open(args.outdir / "RESULTS.md", "w", encoding="utf-8") as f:
-        f.write("# ResNet-50 Anatomy Stack Results\n\n")
+        f.write("# Anatomy Stack Results\n\n")
         f.write("Fold-level logistic regression results using predicted anatomy:\n\n")
         f.write(markdown_table(metrics))
         f.write("\n\nSummary:\n\n")
