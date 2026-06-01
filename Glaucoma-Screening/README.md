@@ -48,6 +48,9 @@ Key fixed-split and search summaries are in `results/`:
 - `baseline_search_summary.md`
 - `baseline_search_summary.csv`
 - `best_model_next_experiments.md`
+- `experiment_progress_chart.md`
+- `experiment_progress_chart.svg`
+- `experiment_progress_milestones.csv`
 - `full_dataset_continuous_regression_cv_findings.md`
 - `goal70_cv_findings.md`
 - `resnet50_anatomy_stack_80_20_findings.md`
@@ -96,5 +99,11 @@ backbone signal, not as a final clinically sufficient model.
 
 An attention-MIL version using ConvNeXt-Tiny image embeddings was also tested.
 It did not improve over simple per-image anatomy prediction plus eye-level mean
-aggregation, so the current best baseline remains the ConvNeXt-Tiny anatomy
-stack with mean aggregation.
+aggregation.
+
+The current best 5-fold candidate is a regularized unfrozen ConvNeXt-Tiny model
+trained on the focused angle-6 anatomy target set. It reached mean AUROC `0.737`,
+sensitivity `0.707`, and specificity `0.722` with validation-balanced fold
+thresholds. This is the first mean 5-fold result above 70/70, but fold-level
+instability and threshold calibration still need review before final manuscript
+claims.
