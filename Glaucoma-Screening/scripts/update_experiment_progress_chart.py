@@ -149,7 +149,37 @@ def generate_markdown(rows: list[dict[str, str]]) -> None:
                 notes=row["notes"],
             )
         )
-    lines.append("")
+    lines.extend(
+        [
+            "",
+            "## Milestone Summaries",
+            "",
+            "These short summaries explain how each experiment changed the next step. The goal is to keep the development logic visible, not just list scores.",
+            "",
+        ]
+    )
+    for row in rows:
+        lines.extend(
+            [
+                f"### {row['sequence']}. {row['display_label']}",
+                "",
+                f"**Question:** {row.get('question', '').strip()}",
+                "",
+                f"**Approach:** {row.get('approach', '').strip()}",
+                "",
+                (
+                    "**Result:** "
+                    f"{row.get('result_summary', '').strip()} "
+                    f"Validation design: {row['validation_design']}. "
+                    f"Run path: `{row['run_path']}`."
+                ),
+                "",
+                f"**Interpretation:** {row.get('interpretation', '').strip()}",
+                "",
+                f"**Decision:** {row.get('decision', '').strip()}",
+                "",
+            ]
+        )
     MD_PATH.write_text("\n".join(lines), encoding="utf-8")
 
 
