@@ -6,33 +6,28 @@ A collection of experiments predicting OCT-derived anterior segment metrics from
 - Utilities for anatomical normalization (nasal/temporal), evaluation, and visualization (attention maps, scatter plots).
 - Slit-lamp labeling + active-learning workflow documented in `slit-project/labeling_readme.md`.
 
-This repo currently hosts the submodule `RETFound_MAE` for related MAE work; main code and data are kept locally/offline for now.
+## Main Project Areas
 
-## RETFound Age-Prediction Reproducibility Bundle
+- `slit-project/`: slit-lamp to AS-OCT modeling scripts and local experiment outputs.
+- `Glaucoma-Screening/`: Paper 2 angle-closure screening documentation, validation summaries, and progress tracking.
+- `METHODOLOGY.md`: slit-lamp/OCT data integration and modeling methodology.
 
-This workspace also contains the Brown Norway rat retinal age-prediction pipeline under `RETFoundLoRA/` and a polished supplementary-data package for the OSD-679 manuscript under:
+## Current Paper 2 Focus
 
-- `reproducibility/osd679_age_prediction_release/`
+The active paper work is slit-lamp image-based angle-closure referral triage.
+The primary endpoint is eye-level Shaffer grade `0/1` versus `2/3/4`, with
+patient-level splitting to avoid leakage.
 
-That bundle includes:
+Key tracking documents:
 
-- image-to-age mapping tables derived from `metadata/image_age_mapping.csv`
-- the primary paper subset manifests for `Controls` day `0/90` and `Controls + HLS (U)` day `0/90`
-- rat-level 3-fold split definitions
-- benchmark / supplementary result tables
-- qualitative best/worst example manifests used for manuscript figures
+- `Glaucoma-Screening/README.md`
+- `Glaucoma-Screening/results/experiment_progress_chart.md`
+- `Glaucoma-Screening/results/best_model_next_experiments.md`
+- `Glaucoma-Screening/EXPERIMENT_SOLUTION_TREE.md`
 
-Key files:
+## Repository Scope
 
-- `reproducibility/osd679_age_prediction_release/Supplementary_Data_1_Image_to_Age_Mapping.xlsx`
-- `reproducibility/osd679_age_prediction_release/Supplementary_Data_2_Benchmark_Splits_and_Results.xlsx`
-- `reproducibility/osd679_age_prediction_release/Supplementary_Data_3_Qualitative_Examples.xlsx`
-- `reproducibility/osd679_age_prediction_release/README.md`
-
-The raw OSD-679 image payload is not redistributed here. The reproducibility bundle provides relative image paths, split definitions, and manuscript-facing tables so the analysis can be reconstructed against a local OSD-679 checkout.
-
-To regenerate the bundle locally, run:
-
-```bash
-python3 scripts/paper/build_reproducibility_bundle.py
-```
+This repository is now intended to track only the slit-lamp/OCT and glaucoma
+screening work. RETFound age-prediction, OSD679 reproducibility bundles, and
+other non-slit local experiments should stay outside this Git history or remain
+ignored local files.
