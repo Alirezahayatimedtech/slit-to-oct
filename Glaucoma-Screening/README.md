@@ -36,6 +36,7 @@ Primary binary label:
 ## Main Documents
 
 - `MANUSCRIPT2_DRAFT.md`: current manuscript draft.
+- `METHODS_RESULTS_NPJ_STYLE.md`: manuscript-ready Methods/Results text and tables for the iterative model-development story.
 - `PAPER2_ANGLE_CLOSURE_FULL_DOCUMENTATION.md`: full technical and clinical documentation.
 - `ANGLE_CLOSURE_STRATEGY_REVIEW.md`: current strategy review and model-selection notes.
 - `AGENT_CLINICAL_PAPER_PLAN.md`: implementation and paper planning notes.
