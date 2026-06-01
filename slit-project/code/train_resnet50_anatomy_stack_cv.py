@@ -73,6 +73,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--num-workers", type=int, default=2)
     p.add_argument("--img-size", type=int, default=224)
     p.add_argument("--backbone", choices=["resnet50", "convnext_tiny"], default="resnet50")
+    p.add_argument(
+        "--target-preset",
+        choices=["all10", "angle6"],
+        default="all10",
+        help="all10 uses all AS-OCT targets; angle6 focuses on ACD, lens vault, AOD500, and TISA500.",
+    )
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--weight-decay", type=float, default=1e-4)
     p.add_argument("--patience", type=int, default=3)
@@ -216,6 +222,22 @@ def write_label_audit(df: pd.DataFrame, args: argparse.Namespace) -> None:
         f.write(f"- Negative eyes: {summary['negative_eyes']}\n")
         f.write(f"- Excluded angle grades: {summary['excluded_angle_grades']}\n")
         f.write(f"- View mode: `{args.view_mode}`\n")
+
+
+def target_columns_for_preset(preset: str) -> list[str]:
+    all_cols = [dst for _, dst in ANATOMY_TARGETS]
+    if preset == "all10":
+        return all_cols
+    if preset == "angle6":
+        return [
+            "acd_endo_mm",
+            "lens_vault_mm",
+            "aod500_temporal_mm",
+            "aod500_nasal_mm",
+            "tisa500_temporal_mm2",
+            "tisa500_nasal_mm2",
+        ]
+    raise ValueError(f"Unsupported target preset: {preset}")
 
 
 class ImageAnatomyDataset(Dataset):
@@ -715,7 +737,7 @@ def run(args: argparse.Namespace) -> None:
         print(f"[PREPARE] Wrote label audit to {args.outdir}")
         return
 
-    target_cols = [dst for _, dst in ANATOMY_TARGETS]
+    target_cols = target_columns_for_preset(args.target_preset)
     eye_labels = (
         df.drop_duplicates("combo_key")
         .groupby("participant_id")["closure_label"]

@@ -47,6 +47,7 @@ Key fixed-split and search summaries are in `results/`:
 
 - `baseline_search_summary.md`
 - `baseline_search_summary.csv`
+- `best_model_next_experiments.md`
 - `full_dataset_continuous_regression_cv_findings.md`
 - `goal70_cv_findings.md`
 - `resnet50_anatomy_stack_80_20_findings.md`
