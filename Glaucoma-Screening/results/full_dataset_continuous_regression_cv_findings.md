@@ -226,17 +226,66 @@ the frozen ResNet-50 version, especially for training-derived threshold balance
 5-fold CV. In the grade-2-excluded sensitivity run, ConvNeXt-Tiny did not improve
 over ResNet-50.
 
+## Experiment 5: ConvNeXt-Tiny Attention-MIL Anatomy Stack
+
+Run paths:
+
+```text
+slit-project/paper2_runs/exp5_convnext_tiny_attention_mil_anatomy_stack_cv_complete476/
+slit-project/paper2_runs/exp5_convnext_tiny_attention_mil_anatomy_stack_cv_complete476_cap12val/
+```
+
+Method:
+
+- Each eye was treated as a bag of slit-lamp images.
+- ConvNeXt-Tiny encoded each image.
+- A learned attention pooling layer produced one eye-level embedding.
+- A regression head predicted the same 10 AS-OCT anatomy targets.
+- Logistic regression classified angle closure from the predicted anatomy.
+- Primary label remained strict grade `0/1` versus `2/3/4`.
+- Backbone was frozen for this quick comparison.
+
+Two validation modes were tested:
+
+- `all_val_images`: train bags sampled up to 12 images per eye, validation used
+  all available images per eye.
+- `cap12_val`: both train and validation bags were capped at 12 images per eye.
+
+Strict `0/1` versus `2/3/4` summary:
+
+| Model | Threshold rule | AUROC | AUPRC | Sensitivity | Specificity | Balanced min |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| ConvNeXt mean aggregation | Threshold balanced on validation fold | 0.655 | 0.180 | 0.657 | 0.642 | 0.616 |
+| Attention-MIL, all validation images | Threshold balanced on validation fold | 0.608 | 0.154 | 0.628 | 0.628 | 0.578 |
+| Attention-MIL, validation capped at 12 images | Threshold balanced on validation fold | 0.575 | 0.129 | 0.628 | 0.611 | 0.572 |
+
+Attention behavior:
+
+- `all_val_images`: mean bag size `27.5` images, maximum `114`; mean maximum
+  attention weight `0.084`.
+- `cap12_val`: mean bag size `10.8` images, maximum `12`; mean maximum attention
+  weight `0.124`.
+
+Conclusion: attention-MIL did not improve the current ConvNeXt anatomy-stack
+baseline. The simple per-image prediction followed by eye-level mean aggregation
+remains better for this dataset and training budget. The attention weights were
+fairly diffuse, suggesting that with a frozen backbone and small positive class,
+the attention layer did not learn a strong view/image-selection signal.
+
 ## Main Comparison
 
 Current ranking of signals:
 
 1. Anatomy-regression stack is the strongest approach overall.
-2. ConvNeXt-Tiny is the best strict-label frozen-backbone variant so far, but
-   the gain over ResNet-50 is modest and not enough for stable 70/70.
-3. Grade-2 exclusion supports the label-noise hypothesis, but it does not fully
+2. ConvNeXt-Tiny with simple eye-level mean aggregation is the best strict-label
+   frozen-backbone variant so far, but the gain over ResNet-50 is modest and not
+   enough for stable 70/70.
+3. Attention-MIL over ConvNeXt image embeddings did not improve performance in
+   the quick frozen-backbone CV experiment.
+4. Grade-2 exclusion supports the label-noise hypothesis, but it does not fully
    solve the problem in 5-fold CV.
-4. Shaffer grade regression alone is weaker than anatomy regression.
-5. The literal predicted-grade threshold `<=1.5` is not usable without
+5. Shaffer grade regression alone is weaker than anatomy regression.
+6. The literal predicted-grade threshold `<=1.5` is not usable without
    calibration because the regressor is not calibrated on the clinical grade
    scale.
 

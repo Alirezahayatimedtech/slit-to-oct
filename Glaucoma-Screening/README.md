@@ -91,3 +91,8 @@ The newest ConvNeXt-Tiny anatomy-stack comparison modestly improved the strict
 `0/1` versus `2/3/4` frozen-backbone CV result over ResNet-50, but still did not
 reach stable 70/70. It should be treated as the current best strict-label
 backbone signal, not as a final clinically sufficient model.
+
+An attention-MIL version using ConvNeXt-Tiny image embeddings was also tested.
+It did not improve over simple per-image anatomy prediction plus eye-level mean
+aggregation, so the current best baseline remains the ConvNeXt-Tiny anatomy
+stack with mean aggregation.
