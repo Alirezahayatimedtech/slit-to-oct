@@ -196,3 +196,68 @@ This combines the two best signals from the block:
 - focused angle/anterior-chamber targets
 - some backbone adaptation to slit-lamp anatomy
 
+## Experiment 5: Regularized Unfrozen Target-Focused ConvNeXt
+
+Run path:
+
+```text
+slit-project/paper2_runs/exp9_convnext_tiny_unfrozen_angle6_regularized_cv/
+```
+
+Method:
+
+- ConvNeXt-Tiny backbone unfrozen.
+- Target-focused angle-6 anatomy targets:
+  - ACD
+  - lens vault
+  - AOD500 temporal
+  - AOD500 nasal
+  - TISA500 temporal
+  - TISA500 nasal
+- Learning rate reduced to `5e-5`.
+- Weight decay increased to `5e-4`.
+- 6 maximum epochs, patience 2.
+- Per-image predictions averaged to eye level.
+- Logistic regression risk model.
+
+Result:
+
+| Model | Threshold rule | AUROC | AUPRC | Sensitivity | Specificity | Balanced min |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| ConvNeXt-Tiny unfrozen angle-6 regularized | Validation-balanced | 0.737 | 0.235 | 0.707 | 0.722 | 0.674 |
+
+Decision: **Best result so far / partial success.**
+
+This is the first mean 5-fold result in this experiment series where sensitivity
+and specificity both exceed `0.70` when thresholds are balanced inside each
+validation fold. It is not yet a final locked model because:
+
+- the balanced-min remains below `0.70` (`0.674`);
+- fold 1 remains weak (`sensitivity 0.600`, `specificity 0.651`);
+- train-derived thresholds remain poor because one fold chooses an overly
+  conservative threshold and misses all positives.
+
+Still, this run is the strongest current direction and should replace the frozen
+angle-6 model as the leading candidate.
+
+Updated ranking:
+
+| Rank | Candidate | Status | Main reason |
+| ---: | --- | --- | --- |
+| 1 | Regularized unfrozen ConvNeXt angle-6 anatomy | Best current result | AUROC `0.737`, sensitivity `0.707`, specificity `0.722` |
+| 2 | Target-focused frozen ConvNeXt angle-6 anatomy | Good fallback | Balanced-min `0.636`, less overfit |
+| 3 | Unfrozen ConvNeXt all-10 anatomy | Promising but less balanced | AUROC `0.684`, balanced-min `0.633` |
+| 4 | Original frozen ConvNeXt all-10 anatomy | Stable baseline | AUROC `0.655`, balanced-min `0.616` |
+| 5 | Three-class risk model | Neutral | Did not improve over baseline |
+| 6 | View-aware aggregation | Failed | Worse than global mean aggregation |
+
+Next step after this result:
+
+1. Treat `exp9` as the new leading model candidate.
+2. Tune threshold calibration and train-derived threshold selection, because the
+   validation-balanced result is strong but the train-derived threshold remains
+   unstable.
+3. Inspect fold 1 false negatives/false positives and grade-2/grade-3
+   borderline cases.
+4. Repeat `exp9` with a fixed 80/20 split and bootstrap CI for a manuscript-style
+   internal validation table.
