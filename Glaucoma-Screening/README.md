@@ -51,6 +51,7 @@ Key fixed-split and search summaries are in `results/`:
 - `experiment_progress_chart.md`
 - `experiment_progress_chart.svg`
 - `experiment_progress_milestones.csv`
+- `exp9_to_exp14_80_80_followup.md`
 - `full_dataset_continuous_regression_cv_findings.md`
 - `goal70_cv_findings.md`
 - `resnet50_anatomy_stack_80_20_findings.md`

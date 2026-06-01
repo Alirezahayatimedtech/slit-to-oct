@@ -72,7 +72,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--num-workers", type=int, default=2)
     p.add_argument("--img-size", type=int, default=224)
-    p.add_argument("--backbone", choices=["resnet50", "convnext_tiny"], default="resnet50")
+    p.add_argument("--backbone", choices=["resnet50", "convnext_tiny", "convnext_small"], default="resnet50")
     p.add_argument(
         "--target-preset",
         choices=["all10", "angle6"],
@@ -272,6 +272,11 @@ class ImageRegressor(nn.Module):
         elif backbone == "convnext_tiny":
             weights = models.ConvNeXt_Tiny_Weights.IMAGENET1K_V1 if pretrained else None
             base = models.convnext_tiny(weights=weights)
+            hidden = base.classifier[2].in_features
+            base.classifier = nn.Identity()
+        elif backbone == "convnext_small":
+            weights = models.ConvNeXt_Small_Weights.IMAGENET1K_V1 if pretrained else None
+            base = models.convnext_small(weights=weights)
             hidden = base.classifier[2].in_features
             base.classifier = nn.Identity()
         else:
