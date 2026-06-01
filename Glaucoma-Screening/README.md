@@ -39,6 +39,7 @@ Primary binary label:
 - `PAPER2_ANGLE_CLOSURE_FULL_DOCUMENTATION.md`: full technical and clinical documentation.
 - `ANGLE_CLOSURE_STRATEGY_REVIEW.md`: current strategy review and model-selection notes.
 - `AGENT_CLINICAL_PAPER_PLAN.md`: implementation and paper planning notes.
+- `EXPERIMENT_SOLUTION_TREE.md`: ranked next-step solution candidates grounded in completed experiments and literature.
 
 ## Results
 
