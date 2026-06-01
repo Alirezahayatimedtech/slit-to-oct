@@ -46,9 +46,11 @@ Key fixed-split and search summaries are in `results/`:
 
 - `baseline_search_summary.md`
 - `baseline_search_summary.csv`
+- `full_dataset_continuous_regression_cv_findings.md`
 - `goal70_cv_findings.md`
 - `resnet50_anatomy_stack_80_20_findings.md`
 - `roi_shared_split_findings.md`
+- `shaffer_grade_regression_80_20_findings.md`
 - `split_manifest_summary.md`
 - `split_manifest_summary.csv`
 
@@ -77,3 +79,10 @@ signal from a regression-only ResNet-50 anatomy stack. Excluding Shaffer grade
 `2` as a borderline sensitivity analysis reached validation sensitivity `0.800`
 and specificity `0.709` when the threshold was balanced internally on
 validation. This is development evidence, not locked-test evidence.
+
+The follow-up 5-fold continuous-regression experiments are documented in
+`results/full_dataset_continuous_regression_cv_findings.md`. In short, the
+10-parameter anatomy-regression stack remained the best signal, but the quick
+frozen-backbone 5-fold runs did not stably reach sensitivity >=0.70 and
+specificity >=0.70. Shaffer-grade regression alone was weaker, and the fixed
+predicted-grade threshold `<=1.5` was not calibrated enough to use directly.
