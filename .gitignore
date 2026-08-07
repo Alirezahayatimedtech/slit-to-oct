@@ -1,73 +1,46 @@
-# Python/runtime cache
+# Python
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
 
-# Editor/local agent state
+# Editors and local automation
 .vscode/
+.idea/
 .codex/
+*~
 .~lock.*
 
-# Local databases and ad hoc documents
-*.db
-*.db-shm
-*.db-wal
-*.docx
-
-# Non-slit local workspaces that should not be tracked in slit-to-oct
-/RETFound*/
-/RETFound_MAE/
-/RETFound_MAE_Model/
-/RETFoundLoRA/
-/LoraRETfoundageReed/
-/reproducibility/
-/scripts/
-/src/
+# Controlled data and prepared manifests
 /data/
 /metadata/
+/slit-project/data/
+/slit-project/code/*.csv
+/slit-project/code/*.xlsx
+/slit-project/paper2_runs/
+/slit-project/runs/
+
+# Generated analyses
 /outputs/
+/results/
 /plots/
 /weights/
-/rfa/
-/PezhuhAI/
-/docs/
+/Glaucoma-Screening/cv/
+/Glaucoma-Screening/results/
 
-# RETFound/age-prediction scratch outputs at repo root
-/age_attention/
-/age_from_retfound_linear_aug/
-/age_gap_outputs/
-/lora_age_outputs/
-/colab_ready_images/
-/configs/
-/runs/
-/N=1000
-/Iop_Analysis.ipynb
-/RETFound_finetune.ipynb
-/build_iop25_dataset.ipynb
-/fit-note.ipynb
-/age_*.py
-/age_prediction.py
-/analyze_age_gap.py
-/data_prep_age_lora.py
-/fit.py
-/hls_vs_control_day90.py
-/lora-age-prediction.py
-/lora_rag_method.md
-/run_paper1_all.sh
-/test_abs_auroc.py
-/day_merge_config.json
-/debug_images.png
-/diagnose_missing_files_example.csv
-/environment.yml
-/figure_longitudinal_recovery.png
-/img_list.txt
-
-# Large local model/data artifacts
+# Model and archive artifacts
 *.pth
 *.pt
 *.ckpt
 *.npz
 *.zip
 
-# Keep slit-project tracked explicitly; large generated artifacts inside it
-# should be staged intentionally only when they are documentation/results.
+# Local documents and databases
+*.db
+*.db-shm
+*.db-wal
+*.docx
+*.xlsx

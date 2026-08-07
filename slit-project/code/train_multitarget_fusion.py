@@ -131,12 +131,24 @@ def parse_args():
         default=Path("fusion_test_scatter.png"),
         help="Save scatter plot of test preds vs true (set to empty string to disable).",
     )
+    p.add_argument(
+        "--source-csv",
+        type=Path,
+        default=Path(SOURCE_CSV),
+        help="Prepared image-level table containing image paths and target columns.",
+    )
+    p.add_argument(
+        "--image-root",
+        type=Path,
+        default=CROP_ROOT,
+        help="Optional local image directory used to resolve filenames.",
+    )
     return p.parse_args()
 
 
-def resolve_crop_path(p: str) -> str | None:
+def resolve_crop_path(p: str, image_root: Path) -> str | None:
     fname = os.path.basename(str(p).replace("\\", "/"))
-    crop_path = CROP_ROOT / fname
+    crop_path = image_root / fname
     if crop_path.exists():
         return str(crop_path)
     for root in LOCAL_FALLBACKS:
@@ -231,14 +243,16 @@ class MILResNet(nn.Module):
         return self.head(bag)
 
 
-def load_and_prepare():
-    df = pd.read_csv(SOURCE_CSV)
+def load_and_prepare(args):
+    df = pd.read_csv(args.source_csv)
     for col in ["Image_Path"] + TARGET_COLS:
         if col not in df.columns:
-            raise SystemExit(f"Missing column {col} in {SOURCE_CSV}")
+            raise SystemExit(f"Missing column {col} in {args.source_csv}")
     for col in TARGET_COLS:
         df[col] = pd.to_numeric(df[col], errors="coerce")
-    df["Image_Path"] = df["Image_Path"].apply(resolve_crop_path)
+    df["Image_Path"] = df["Image_Path"].apply(
+        lambda path: resolve_crop_path(path, args.image_root)
+    )
     df = df.dropna(subset=["Image_Path"] + TARGET_COLS)
     df = df[df["Image_Path"].apply(os.path.exists)]
     if df.empty:
@@ -253,7 +267,15 @@ def load_and_prepare():
     for key, group in df.groupby("combo_key"):
         paths = group["Image_Path"].tolist()
         targets = group[TARGET_COLS].mean().values  # mean targets per combo
-        samples.append({"combo_key": key, "Paths": paths, "targets": targets, "num_views": len(paths)})
+        samples.append(
+            {
+                "participant_id": str(key).split("_", 1)[0],
+                "combo_key": key,
+                "Paths": paths,
+                "targets": targets,
+                "num_views": len(paths),
+            }
+        )
     return pd.DataFrame(samples)
 
 
@@ -388,8 +410,8 @@ def main():
         args.test_scatter = None
     mode_desc = f"{'EVAL' if args.eval_only else 'TRAINING'} {'MIL' if args.method == 'mil' else f'Fusion ({args.fusion})'}"
     print(f"--- {mode_desc} (all views per combo): {', '.join(TARGET_COLS)} ---")
-    df = load_and_prepare()
-    groups = df["combo_key"]
+    df = load_and_prepare(args)
+    groups = df["participant_id"]
     # report raw target stats before scaling
     raw_targets = np.vstack(df["targets"].to_list())
     print(
@@ -405,10 +427,26 @@ def main():
     # Adjust val fraction relative to remaining data
     val_rel = VAL_FRACTION / max(1e-9, (1.0 - TEST_FRACTION))
     gss_val = GroupShuffleSplit(n_splits=1, test_size=val_rel, random_state=24)
-    train_idx, val_idx = next(gss_val.split(train_tmp_df, groups=train_tmp_df["combo_key"]))
+    train_idx, val_idx = next(
+        gss_val.split(train_tmp_df, groups=train_tmp_df["participant_id"])
+    )
     train_df = train_tmp_df.iloc[train_idx].copy()
     val_df = train_tmp_df.iloc[val_idx].copy()
-    print(f"Combos -> Train: {len(train_df)}, Val: {len(val_df)}, Test: {len(test_df)} (grouped by patient/eye)")
+    split_participants = {
+        "train": set(train_df["participant_id"]),
+        "val": set(val_df["participant_id"]),
+        "test": set(test_df["participant_id"]),
+    }
+    if (
+        split_participants["train"] & split_participants["val"]
+        or split_participants["train"] & split_participants["test"]
+        or split_participants["val"] & split_participants["test"]
+    ):
+        raise RuntimeError("Participant overlap detected across data splits.")
+    print(
+        f"Eyes -> Train: {len(train_df)}, Val: {len(val_df)}, Test: {len(test_df)} "
+        "(participant-disjoint)"
+    )
 
     scaler = StandardScaler()
     if args.eval_only:

@@ -1,16 +1,9 @@
-"""
-ACD regression with fusion of all views using ResNet-50.
+"""Multi-view slit-lamp baseline for AS-OCT-derived ACD regression.
 
-- Groups images by patient/eye (filename prefix 'patient_eye_*').
-- Uses ALL available views per combo (requires at least MIN_VIEWS; caps at MAX_VIEWS to save memory).
-- Fusion: average transformed views into a single image tensor before the backbone (toggle logic externally if you add other fusion modes).
-- Regression head outputs the target(s) in TARGET_COLS (currently ACD only).
-- Patient-grouped split, target standardization, MSE loss, cosine LR, EMA, early stopping.
-
-Snapshot from commit 47c0eb687bba6861126d196b7f4f67a6fad8562b (best baseline).
+Images are grouped by eye for model input and split by participant so fellow
+eyes cannot cross training, validation, or test partitions. This is a technical
+validation baseline, not a clinical deployment model.
 """
-# Best run: Val MSE 0.6486, Test MSE 0.5554, Test MAE(raw) 0.2587, Test r 0.6893 (ResNet-50 MIL attention, mixup 0.2).
-# Best ACD config: MIL attention, LR 5e-4, wd 5e-3, patience 6, mixup 0.2, val/test 0.15/0.15, no erasing.
 
 import argparse
 import copy
@@ -122,12 +115,24 @@ def parse_args():
     p.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Batch size for training/eval.")
     p.add_argument("--lr", type=float, default=LEARNING_RATE, help="Learning rate for main training.")
     p.add_argument("--weight-decay", type=float, default=WEIGHT_DECAY, help="Weight decay for main training.")
+    p.add_argument(
+        "--source-csv",
+        type=Path,
+        default=Path(SOURCE_CSV),
+        help="Prepared image-level table containing Image_Path and ACD target columns.",
+    )
+    p.add_argument(
+        "--image-root",
+        type=Path,
+        default=CROP_ROOT,
+        help="Optional local image directory used to resolve filenames.",
+    )
     return p.parse_args()
 
 
-def resolve_crop_path(p: str) -> str | None:
+def resolve_crop_path(p: str, image_root: Path) -> str | None:
     fname = os.path.basename(str(p).replace("\\", "/"))
-    crop_path = CROP_ROOT / fname
+    crop_path = image_root / fname
     if crop_path.exists():
         return str(crop_path)
     for root in LOCAL_FALLBACKS:
@@ -251,19 +256,21 @@ def unfreeze_backbone(model):
             p.requires_grad = True
 
 
-def load_and_prepare():
-    df = pd.read_csv(SOURCE_CSV)
+def load_and_prepare(args):
+    df = pd.read_csv(args.source_csv)
     if "View_Label" in df.columns:
         df["View_Label_norm"] = df["View_Label"].astype(str).str.strip().str.lower()
         df = df[df["View_Label_norm"] == "center"]
         if df.empty:
-            raise SystemExit(f"No rows with View_Label == center in {SOURCE_CSV}")
+            raise SystemExit(f"No rows with View_Label == center in {args.source_csv}")
     for col in ["Image_Path"] + TARGET_COLS:
         if col not in df.columns:
-            raise SystemExit(f"Missing column {col} in {SOURCE_CSV}")
+            raise SystemExit(f"Missing column {col} in {args.source_csv}")
     for col in TARGET_COLS:
         df[col] = pd.to_numeric(df[col], errors="coerce")
-    df["Image_Path"] = df["Image_Path"].apply(resolve_crop_path)
+    df["Image_Path"] = df["Image_Path"].apply(
+        lambda path: resolve_crop_path(path, args.image_root)
+    )
     df = df.dropna(subset=["Image_Path"] + TARGET_COLS)
     df = df[df["Image_Path"].apply(os.path.exists)]
     if df.empty:
@@ -279,7 +286,16 @@ def load_and_prepare():
     for key, group in df.groupby("combo_key"):
         paths = group["Image_Path"].tolist()
         targets = group[TARGET_COLS].mean().values  # mean targets per combo
-        samples.append({"combo_key": key, "Paths": paths, "targets": targets, "num_views": len(paths)})
+        participant_id = str(key).split("_", 1)[0]
+        samples.append(
+            {
+                "participant_id": participant_id,
+                "combo_key": key,
+                "Paths": paths,
+                "targets": targets,
+                "num_views": len(paths),
+            }
+        )
         total_images += len(paths)
     print(f"[DATA] {len(samples)} combos | {total_images} images kept after filtering (center only).")
     return pd.DataFrame(samples)
@@ -416,8 +432,8 @@ def main():
         args.test_scatter = None
     mode_desc = f"{'EVAL' if args.eval_only else 'TRAINING'} {'MIL' if args.method == 'mil' else f'Fusion ({args.fusion})'}"
     print(f"--- {mode_desc} (all views per combo): {', '.join(TARGET_COLS)} ---")
-    df = load_and_prepare()
-    groups = df["combo_key"]
+    df = load_and_prepare(args)
+    groups = df["participant_id"]
     # report raw target stats before scaling
     raw_targets = np.vstack(df["targets"].to_list())
     print(
@@ -433,10 +449,26 @@ def main():
     # Adjust val fraction relative to remaining data
     val_rel = VAL_FRACTION / max(1e-9, (1.0 - TEST_FRACTION))
     gss_val = GroupShuffleSplit(n_splits=1, test_size=val_rel, random_state=24)
-    train_idx, val_idx = next(gss_val.split(train_tmp_df, groups=train_tmp_df["combo_key"]))
+    train_idx, val_idx = next(
+        gss_val.split(train_tmp_df, groups=train_tmp_df["participant_id"])
+    )
     train_df = train_tmp_df.iloc[train_idx].copy()
     val_df = train_tmp_df.iloc[val_idx].copy()
-    print(f"Combos -> Train: {len(train_df)}, Val: {len(val_df)}, Test: {len(test_df)} (grouped by patient/eye)")
+    split_participants = {
+        "train": set(train_df["participant_id"]),
+        "val": set(val_df["participant_id"]),
+        "test": set(test_df["participant_id"]),
+    }
+    if (
+        split_participants["train"] & split_participants["val"]
+        or split_participants["train"] & split_participants["test"]
+        or split_participants["val"] & split_participants["test"]
+    ):
+        raise RuntimeError("Participant overlap detected across data splits.")
+    print(
+        f"Eyes -> Train: {len(train_df)}, Val: {len(val_df)}, Test: {len(test_df)} "
+        "(participant-disjoint)"
+    )
 
     scaler = StandardScaler()
     if args.eval_only:
