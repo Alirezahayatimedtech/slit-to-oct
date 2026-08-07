@@ -9,6 +9,7 @@ Simple Tkinter labeling tool:
 Keys: [A]=left, [S]=center, [D]=right, [O]=other, [U]=no slit, [K]=skip, [Z]=undo, [Q]=quit
 """
 
+import csv
 import os
 import sys
 import tkinter as tk
@@ -222,11 +223,11 @@ class LabelApp:
             self.photo = ImageTk.PhotoImage(img)
             self.canvas.delete("all")
             self.canvas.create_image(MAX_W//2, MAX_H//2, image=self.photo)
-        except Exception as e:
-            self.info.config(text=f"Failed to load: {path} ({e})")
+        except Exception as exc:
+            self.info.config(text=f"Failed to load: {path} ({exc})")
             try:
-                with open(FAIL_LOG, "a", encoding="utf-8") as f:
-                    f.write(f"{path},\"{str(e).replace('\"','\"\"')}\"\n")
+                with open(FAIL_LOG, "a", encoding="utf-8", newline="") as handle:
+                    csv.writer(handle).writerow([path, str(exc)])
             except Exception:
                 pass
             self.apply_label(None)  # skip
